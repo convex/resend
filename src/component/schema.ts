@@ -1,6 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { vEventType, vOptions, vStatus, vTemplate } from "./shared.js";
+import {
+  vAttachment,
+  vEventType,
+  vOptions,
+  vStatus,
+  vTemplate,
+} from "./shared.js";
 
 export default defineSchema({
   content: defineTable({
@@ -40,6 +46,7 @@ export default defineSchema({
         }),
       ),
     ),
+    attachments: v.optional(v.array(vAttachment)),
     status: vStatus,
     complained: v.boolean(),
     errorMessage: v.optional(v.string()),

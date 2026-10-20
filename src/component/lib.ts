@@ -16,6 +16,7 @@ import {
   ACCEPTED_EVENT_TYPES,
   type RuntimeConfig,
   vEmailEvent,
+  vAttachment,
   vOptions,
   vStatus,
   vTemplate,
@@ -140,6 +141,7 @@ export const sendEmail = mutation({
         }),
       ),
     ),
+    attachments: v.optional(v.array(vAttachment)),
     idempotencyKey: v.optional(v.string()),
   },
   returns: v.id("emails"),
@@ -217,6 +219,7 @@ export const sendEmail = mutation({
       text: textContentId,
       template: args.template,
       headers: args.headers,
+      attachments: args.attachments,
       idempotencyKey: args.idempotencyKey,
       segment,
       status: "waiting",
@@ -551,7 +554,12 @@ const vBatchReturns = v.union(
   }),
 );
 
+const RESEND_EMAILS_URL = "https://api.resend.com/emails";
+
 // Okay, finally! Let's call the Resend API with the batch of emails.
+// Resend's batch endpoint does not take attachments: an email with attachments
+// is sent on its own through POST /emails, with its own idempotency key, once
+// the others have gone by batch.
 export const callResendAPIWithBatch = internalAction({
   args: {
     apiKey: v.string(),
@@ -559,7 +567,7 @@ export const callResendAPIWithBatch = internalAction({
   },
   returns: vBatchReturns,
   handler: async (ctx, args) => {
-    // Construct the JSON payload for the Resend API from all the database values.
+    // Construct the JSON payloads for the Resend API from all the database values.
     const batchPayload = await createResendBatchPayload(ctx, args.emails);
 
     if (batchPayload === null) {
@@ -568,49 +576,150 @@ export const callResendAPIWithBatch = internalAction({
       return;
     }
 
-    const [emailIds, body] = batchPayload;
-
-    // Make API call
-    const response = await fetch("https://api.resend.com/emails/batch", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${args.apiKey}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": args.emails[0].toString(),
-      },
-      body,
-    });
-    if (!response.ok) {
-      if (PERMANENT_ERROR_CODES.has(response.status)) {
-        const errorMessage = `Resend API error: ${response.status} ${response.statusText} ${await response.text()}`;
-        console.error(
-          JSON.stringify({
-            status: "permanent_failure",
-            httpStatus: response.status,
-            httpStatusText: response.statusText,
-            errorMessage,
-            emailIds: args.emails,
-          }),
-        );
-        await ctx.runMutation(internal.lib.markEmailsFailed, {
-          emailIds: args.emails,
-          errorMessage,
+    const [emailIds, payloads] = batchPayload;
+    const queued = emailIds.map((emailId, i) => ({
+      emailId,
+      payload: payloads[i],
+    }));
+    const batched = queued.filter((e) => e.payload.attachments === undefined);
+    const withAttachments = queued.filter(
+      (e) => e.payload.attachments !== undefined,
+    );
+    // With several requests, a later one can keep failing after an earlier one
+    // went through: the workpool then fails the whole action, and every email
+    // still queued is marked failed. So each accepted request is recorded at
+    // once. A single batch is recorded by onEmailComplete, as before.
+    const recordEachRequest = withAttachments.length > 0;
+    const resendIds = new Map<Id<"emails">, string>();
+    const send = async (
+      request: { url: string; idempotencyKey: string; body: unknown },
+      group: Id<"emails">[],
+    ) => {
+      const ids = await postToResend(ctx, {
+        ...request,
+        apiKey: args.apiKey,
+        emailIds: group,
+      });
+      if (ids === null) return;
+      // Resend answers in the order of the request.
+      const accepted = group.flatMap((emailId, i) =>
+        ids[i] ? [{ emailId, resendId: ids[i] }] : [],
+      );
+      for (const { emailId, resendId } of accepted) {
+        resendIds.set(emailId, resendId);
+      }
+      if (recordEachRequest) {
+        await ctx.runMutation(internal.lib.markEmailsSent, {
+          emailIds: accepted.map((e) => e.emailId),
+          resendIds: accepted.map((e) => e.resendId),
         });
-        return;
       }
-      // For now, try again.
-      const errorText = await response.text();
-      throw new Error(`Resend API error: ${errorText}`);
-    } else {
-      const data = await response.json();
-      if (!data.data) {
-        throw new Error("Resend API error: No data returned");
-      }
-      return {
-        emailIds,
-        resendIds: data.data.map((d: { id: string }) => d.id),
-      };
+    };
+
+    if (batched.length > 0) {
+      await send(
+        {
+          url: `${RESEND_EMAILS_URL}/batch`,
+          idempotencyKey: args.emails[0].toString(),
+          body: batched.map((e) => e.payload),
+        },
+        batched.map((e) => e.emailId),
+      );
     }
+    for (const { emailId, payload } of withAttachments) {
+      await send(
+        {
+          url: RESEND_EMAILS_URL,
+          idempotencyKey: `${emailId}:attachments`,
+          body: payload,
+        },
+        [emailId],
+      );
+    }
+    const sent = emailIds.filter((emailId) => resendIds.has(emailId));
+    return {
+      emailIds: sent,
+      resendIds: sent.map((emailId) => resendIds.get(emailId) ?? ""),
+    };
+  },
+});
+
+// One call to the Resend API. A permanent error marks its emails failed and
+// returns null; any other error throws, for the workpool to retry the action
+// (the idempotency keys keep what already went from going twice).
+async function postToResend(
+  ctx: ActionCtx,
+  request: {
+    apiKey: string;
+    url: string;
+    idempotencyKey: string;
+    body: unknown;
+    emailIds: Id<"emails">[];
+  },
+): Promise<string[] | null> {
+  const response = await fetch(request.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${request.apiKey}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": request.idempotencyKey,
+    },
+    body: JSON.stringify(request.body),
+  });
+  if (!response.ok) {
+    if (PERMANENT_ERROR_CODES.has(response.status)) {
+      const errorMessage = `Resend API error: ${response.status} ${response.statusText} ${await response.text()}`;
+      console.error(
+        JSON.stringify({
+          status: "permanent_failure",
+          httpStatus: response.status,
+          httpStatusText: response.statusText,
+          errorMessage,
+          emailIds: request.emailIds,
+        }),
+      );
+      await ctx.runMutation(internal.lib.markEmailsFailed, {
+        emailIds: request.emailIds,
+        errorMessage,
+      });
+      return null;
+    }
+    // For now, try again.
+    const errorText = await response.text();
+    throw new Error(`Resend API error: ${errorText}`);
+  }
+  const data = await response.json();
+  // POST /emails/batch answers { data: [{ id }] }; POST /emails answers { id }.
+  if (Array.isArray(data?.data)) {
+    return data.data.map((d: { id: string }) => d.id);
+  }
+  if (typeof data?.id === "string") {
+    return [data.id];
+  }
+  throw new Error("Resend API error: No data returned");
+}
+
+// Records emails Resend accepted, leaving alone those no longer queued (a
+// webhook may already have moved them on).
+export const markEmailsSent = internalMutation({
+  args: {
+    emailIds: v.array(v.id("emails")),
+    resendIds: v.array(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await Promise.all(
+      args.emailIds.map(async (emailId, i) => {
+        const email = await ctx.db.get("emails", emailId);
+        if (!email || email.status !== "queued") {
+          return;
+        }
+        await ctx.db.patch("emails", emailId, {
+          status: "sent",
+          resendId: args.resendIds[i],
+        });
+      }),
+    );
   },
 });
 
@@ -657,12 +766,18 @@ export const onEmailComplete = emailPool.defineOnComplete({
       }
       const { emailIds, resendIds } = result;
       await Promise.all(
-        emailIds.map((emailId, i) =>
-          ctx.db.patch("emails", emailId, {
+        emailIds.map(async (emailId, i) => {
+          // Already recorded by the action (callResendAPIWithBatch), and maybe
+          // moved on by a webhook since: leave it as it is.
+          const email = await ctx.db.get("emails", emailId);
+          if (email?.resendId === resendIds[i]) {
+            return;
+          }
+          await ctx.db.patch("emails", emailId, {
             status: "sent",
             resendId: resendIds[i],
-          }),
-        ),
+          });
+        }),
       );
     } else if (args.result.kind === "failed") {
       await markEmailsFailedHandler(ctx, {
@@ -691,7 +806,7 @@ export const onEmailComplete = emailPool.defineOnComplete({
 async function createResendBatchPayload(
   ctx: ActionCtx,
   emailIds: Id<"emails">[],
-): Promise<[Id<"emails">[], string] | null> {
+): Promise<[Id<"emails">[], Record<string, unknown>[]] | null> {
   // Fetch emails from database.
   const allEmails = await ctx.runQuery(internal.lib.getEmailsByIds, {
     emailIds,
@@ -740,10 +855,21 @@ async function createResendBatchPayload(
       payload.text = email.text ? contentMap.get(email.text) : undefined;
     }
 
+    // Files by URL: Resend downloads them when it sends.
+    if (email.attachments && email.attachments.length > 0) {
+      payload.attachments = email.attachments.map((attachment) => ({
+        filename: attachment.filename,
+        path: attachment.path,
+        ...(attachment.contentType
+          ? { content_type: attachment.contentType }
+          : {}),
+      }));
+    }
+
     return payload;
   });
 
-  return [emails.map((e) => e._id), JSON.stringify(batchPayload)];
+  return [emails.map((e) => e._id), batchPayload];
 }
 
 const FIXED_WINDOW_DELAY = 100;
