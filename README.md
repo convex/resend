@@ -205,6 +205,8 @@ when it sends the email, so the URL must stay valid until then (a Convex storage
 URL does as long as the file is not deleted):
 
 ```ts
+const url = await ctx.storage.getUrl(storageId);
+if (url === null) throw new Error("File not found");
 const emailId = await resend.sendEmail(ctx, {
   from: "Me <test@mydomain.com>",
   to: "delivered@resend.dev",
@@ -213,7 +215,7 @@ const emailId = await resend.sendEmail(ctx, {
   attachments: [
     {
       filename: "invoice.pdf",
-      path: await ctx.storage.getUrl(storageId),
+      path: url,
       contentType: "application/pdf", // optional
     },
   ],

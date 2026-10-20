@@ -443,9 +443,7 @@ describe("sendEmail with idempotencyKey", () => {
     expect(second).toBe(first);
 
     // Only one email should have been inserted.
-    const emails = await t.run(async (ctx) =>
-      ctx.db.query("emails").collect(),
-    );
+    const emails = await t.run(async (ctx) => ctx.db.query("emails").collect());
     expect(emails.length).toBe(1);
   });
 
@@ -455,9 +453,7 @@ describe("sendEmail with idempotencyKey", () => {
 
     expect(second).not.toBe(first);
 
-    const emails = await t.run(async (ctx) =>
-      ctx.db.query("emails").collect(),
-    );
+    const emails = await t.run(async (ctx) => ctx.db.query("emails").collect());
     expect(emails.length).toBe(2);
   });
 
@@ -467,9 +463,7 @@ describe("sendEmail with idempotencyKey", () => {
 
     expect(second).not.toBe(first);
 
-    const emails = await t.run(async (ctx) =>
-      ctx.db.query("emails").collect(),
-    );
+    const emails = await t.run(async (ctx) => ctx.db.query("emails").collect());
     expect(emails.length).toBe(2);
   });
 });
@@ -642,7 +636,67 @@ describe("callResendAPIWithBatch with attachments", () => {
     expect(failed?.status).toBe("failed");
     expect(failed?.errorMessage).toContain("Invalid attachment");
     const sent = await t.run((ctx) => ctx.db.get("emails", plain._id));
-    expect(sent?.status).toBe("queued");
+    expect(sent?.status).toBe("sent");
+    expect(sent?.resendId).toBe("re_plain");
+  });
+
+  it("records the batch at once, so a later failing attachment request cannot fail it", async () => {
+    const withFiles = await queuedEmail({ attachments: [attachment] });
+    const plain = await queuedEmail({ subject: "Plain" });
+    resendAnswers((url) =>
+      url.endsWith("/emails/batch")
+        ? json({ data: [{ id: "re_plain" }] })
+        : json({ message: "unavailable" }, 503),
+    );
+    await expect(callResend([withFiles._id, plain._id])).rejects.toThrow(
+      "Resend API error",
+    );
+
+    // The workpool gives up after its retries: every email of the action is
+    // passed to markEmailsFailed, which only touches those still queued.
+    await t.mutation(internal.lib.markEmailsFailed, {
+      emailIds: [withFiles._id, plain._id],
+      errorMessage: "Resend API error: unavailable",
+    });
+
+    const sent = await t.run((ctx) => ctx.db.get("emails", plain._id));
+    expect(sent?.status).toBe("sent");
+    expect(sent?.resendId).toBe("re_plain");
+    const failed = await t.run((ctx) => ctx.db.get("emails", withFiles._id));
+    expect(failed?.status).toBe("failed");
+  });
+
+  it("does not move back an email a webhook moved on after the action recorded it", async () => {
+    const withFiles = await queuedEmail({ attachments: [attachment] });
+    resendAnswers(() => json({ id: "re_files" }));
+    await callResend([withFiles._id]);
+    await t.run((ctx) =>
+      ctx.db.patch("emails", withFiles._id, { status: "delivered" }),
+    );
+
+    await t.mutation(internal.lib.onEmailComplete, {
+      workId: "work",
+      context: { emailIds: [withFiles._id] },
+      result: {
+        kind: "success",
+        returnValue: { emailIds: [withFiles._id], resendIds: ["re_files"] },
+      },
+    });
+
+    const email = await t.run((ctx) => ctx.db.get("emails", withFiles._id));
+    expect(email?.status).toBe("delivered");
+  });
+
+  it("keeps sending a batch without attachments exactly as before", async () => {
+    const plain = await queuedEmail({ subject: "Plain" });
+    resendAnswers(() => json({ data: [{ id: "re_plain" }] }));
+
+    const result = await callResend([plain._id]);
+
+    expect(result).toEqual({ emailIds: [plain._id], resendIds: ["re_plain"] });
+    // Recorded by onEmailComplete, not by the action.
+    const email = await t.run((ctx) => ctx.db.get("emails", plain._id));
+    expect(email?.status).toBe("queued");
   });
 
   it("throws on a transient error so the action is retried with the same keys", async () => {
@@ -664,15 +718,17 @@ describe("callResendAPIWithBatch with attachments", () => {
     );
     const result = await callResend([withFiles._id, plain._id]);
 
+    // The batch was recorded the first time: the retry only sends what is
+    // still queued, with the same key.
     expect(result).toEqual({
-      emailIds: [withFiles._id, plain._id],
-      resendIds: ["re_files", "re_plain"],
+      emailIds: [withFiles._id],
+      resendIds: ["re_files"],
     });
-    // Same requests and keys on the retry: Resend answers them with the first
-    // result instead of sending again.
     const keys = (calls: Call[]) =>
       calls.map((call) => [call.url, call.headers["Idempotency-Key"]]);
-    expect(keys(second)).toEqual(keys(first));
+    expect(keys(second)).toEqual(keys(first).slice(1));
+    const sent = await t.run((ctx) => ctx.db.get("emails", plain._id));
+    expect(sent?.resendId).toBe("re_plain");
   });
 
   it("stores attachments with the email when sending", async () => {
