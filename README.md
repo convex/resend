@@ -198,6 +198,38 @@ const emailId = await resend.sendEmail(ctx, {
 Because `sendEmail` runs in a transactional mutation, concurrent enqueues with
 the same key are safe: one wins and the others receive its `EmailId`.
 
+### Attachments
+
+`sendEmail` can attach files by URL. Resend downloads each file from its `path`
+when it sends the email, so the URL must stay valid until then (a Convex storage
+URL does as long as the file is not deleted):
+
+```ts
+const emailId = await resend.sendEmail(ctx, {
+  from: "Me <test@mydomain.com>",
+  to: "delivered@resend.dev",
+  subject: "Your invoice",
+  html: "...",
+  attachments: [
+    {
+      filename: "invoice.pdf",
+      path: await ctx.storage.getUrl(storageId),
+      contentType: "application/pdf", // optional
+    },
+  ],
+});
+```
+
+Resend's batch endpoint does not accept attachments, so an email that has some
+is sent on its own through `POST /emails`, in the same action as the batch it
+was queued with. It has its own idempotency key (`<emailId>:attachments`), so a
+retried action never sends it twice, and a permanent error from Resend fails
+only that email. Emails without attachments are sent exactly as before.
+
+The file contents are never stored by the component (an email is kept in a
+document limited to 1 MB): to attach file contents directly rather than a URL,
+see `sendEmailManually` below.
+
 ### Using Resend Templates
 
 You can use
@@ -441,5 +473,6 @@ export const sendManualEmail = internalAction({
 ```
 
 Use `sendEmailManually` when you need features not supported by the batch API,
-such as attachments, or when you want to send an email immediately without
+such as attachments given as file contents (attachments by URL are supported by
+`sendEmail`, see above), or when you want to send an email immediately without
 waiting for the batching system.

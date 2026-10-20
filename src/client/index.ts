@@ -180,6 +180,14 @@ export type SendEmailOptions =
       replyTo?: string[];
       headers?: { name: string; value: string }[];
       /**
+       * Files attached by URL: Resend downloads each one from `path` when it
+       * sends the email (e.g. a Convex storage URL from `ctx.storage.getUrl`,
+       * which must stay valid until then). An email with attachments is sent
+       * on its own through POST /emails: Resend's batch endpoint does not
+       * take attachments.
+       */
+      attachments?: { filename: string; path: string; contentType?: string }[];
+      /**
        * An optional caller-supplied key that dedupes enqueues. If an email with
        * this key has already been enqueued, `sendEmail` returns the existing
        * {@link EmailId} instead of enqueueing (and delivering) a duplicate.
@@ -200,6 +208,14 @@ export type SendEmailOptions =
       text?: never;
       replyTo?: string[];
       headers?: { name: string; value: string }[];
+      /**
+       * Files attached by URL: Resend downloads each one from `path` when it
+       * sends the email (e.g. a Convex storage URL from `ctx.storage.getUrl`,
+       * which must stay valid until then). An email with attachments is sent
+       * on its own through POST /emails: Resend's batch endpoint does not
+       * take attachments.
+       */
+      attachments?: { filename: string; path: string; contentType?: string }[];
       /**
        * An optional caller-supplied key that dedupes enqueues. If an email with
        * this key has already been enqueued, `sendEmail` returns the existing
@@ -438,6 +454,7 @@ export class Resend {
     subject?: string;
     replyTo: string[];
     headers?: { name: string; value: string }[];
+    attachments?: { filename: string; path: string; contentType?: string }[];
     status: Status;
     errorMessage?: string;
     bounced?: boolean;

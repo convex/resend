@@ -32,6 +32,16 @@ export const vTemplate = v.object({
 });
 export type Template = Infer<typeof vTemplate>;
 
+// Validator for a file attached by URL: Resend downloads it from `path` when it
+// sends the email. Never the bytes themselves: an email is kept in a document
+// limited to 1 MB.
+export const vAttachment = v.object({
+  filename: v.string(),
+  path: v.string(),
+  contentType: v.optional(v.string()),
+});
+export type Attachment = Infer<typeof vAttachment>;
+
 // Validator for the runtime options used by the component.
 export const vOptions = v.object({
   initialBackoffMs: v.number(),

@@ -1,9 +1,10 @@
-import { expect, describe, it, beforeEach } from "vitest";
-import { api } from "./_generated/api.js";
+import { expect, describe, it, beforeEach, afterEach, vi } from "vitest";
+import { api, internal } from "./_generated/api.js";
 import { vEmailEvent, type EmailEvent } from "./shared.js";
 import { attemptToParse } from "./utils.js";
 import {
   createTestEventOfType,
+  insertTestEmail,
   insertTestSentEmail,
   setupTest,
   setupTestLastOptions,
@@ -498,5 +499,199 @@ describe("createManualEmail", () => {
     expect(email.to).toEqual(["delivered@resend.dev"]);
     expect(email.cc).toEqual(["cc@resend.dev"]);
     expect(email.bcc).toEqual(["bcc@resend.dev"]);
+  });
+});
+
+describe("callResendAPIWithBatch with attachments", () => {
+  let t: Tester;
+
+  const attachment = {
+    filename: "invoice.pdf",
+    path: "https://example.com/storage/invoice",
+    contentType: "application/pdf",
+  };
+
+  type Call = { url: string; headers: Record<string, string>; body: unknown };
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  // Resend's API, answering each call from its URL; the calls are recorded.
+  const resendAnswers = (answer: (url: string) => Response): Call[] => {
+    const calls: Call[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (
+          url: string,
+          init: { headers: Record<string, string>; body: string },
+        ) => {
+          calls.push({
+            url,
+            headers: init.headers,
+            body: JSON.parse(init.body) as unknown,
+          });
+          return answer(url);
+        },
+      ),
+    );
+    return calls;
+  };
+
+  const queuedEmail = (overrides: Partial<Doc<"emails">>) =>
+    insertTestEmail(t, {
+      from: "test@resend.dev",
+      to: ["delivered@resend.dev"],
+      subject: "Test",
+      replyTo: [],
+      status: "queued",
+      bounced: false,
+      complained: false,
+      failed: false,
+      deliveryDelayed: false,
+      opened: false,
+      clicked: false,
+      segment: 1,
+      finalizedAt: Number.MAX_SAFE_INTEGER,
+      ...overrides,
+    });
+
+  const callResend = (emails: Id<"emails">[]) =>
+    t.action(internal.lib.callResendAPIWithBatch, {
+      apiKey: "test-key",
+      emails,
+    });
+
+  beforeEach(() => {
+    t = setupTest();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends an email with attachments alone through POST /emails, the others by batch", async () => {
+    const withFiles = await queuedEmail({ attachments: [attachment] });
+    const plain = await queuedEmail({ subject: "Plain" });
+    const calls = resendAnswers((url) =>
+      url.endsWith("/emails/batch")
+        ? json({ data: [{ id: "re_plain" }] })
+        : json({ id: "re_files" }),
+    );
+
+    const result = await callResend([withFiles._id, plain._id]);
+
+    expect(result).toEqual({
+      emailIds: [withFiles._id, plain._id],
+      resendIds: ["re_files", "re_plain"],
+    });
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.resend.com/emails/batch",
+      "https://api.resend.com/emails",
+    ]);
+    const batch = calls[0].body as Record<string, unknown>[];
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toMatchObject({ subject: "Plain" });
+    expect(batch[0]).not.toHaveProperty("attachments");
+    expect(calls[1].body).toMatchObject({
+      subject: "Test",
+      attachments: [
+        {
+          filename: "invoice.pdf",
+          path: attachment.path,
+          content_type: "application/pdf",
+        },
+      ],
+    });
+    // Each request has its own key: a retried action never sends twice.
+    expect(calls[0].headers["Idempotency-Key"]).toBe(withFiles._id);
+    expect(calls[1].headers["Idempotency-Key"]).toBe(
+      `${withFiles._id}:attachments`,
+    );
+  });
+
+  it("omits content_type when none was given", async () => {
+    const withFiles = await queuedEmail({
+      attachments: [{ filename: "notes.txt", path: attachment.path }],
+    });
+    const calls = resendAnswers(() => json({ id: "re_files" }));
+
+    await callResend([withFiles._id]);
+
+    expect(calls).toHaveLength(1);
+    const [sent] = (calls[0].body as { attachments: object[] }).attachments;
+    expect(sent).toEqual({ filename: "notes.txt", path: attachment.path });
+  });
+
+  it("fails only the email with attachments when Resend refuses it for good", async () => {
+    const withFiles = await queuedEmail({ attachments: [attachment] });
+    const plain = await queuedEmail({ subject: "Plain" });
+    resendAnswers((url) =>
+      url.endsWith("/emails/batch")
+        ? json({ data: [{ id: "re_plain" }] })
+        : json({ message: "Invalid attachment" }, 422),
+    );
+
+    const result = await callResend([withFiles._id, plain._id]);
+
+    expect(result).toEqual({ emailIds: [plain._id], resendIds: ["re_plain"] });
+    const failed = await t.run((ctx) => ctx.db.get("emails", withFiles._id));
+    expect(failed?.status).toBe("failed");
+    expect(failed?.errorMessage).toContain("Invalid attachment");
+    const sent = await t.run((ctx) => ctx.db.get("emails", plain._id));
+    expect(sent?.status).toBe("queued");
+  });
+
+  it("throws on a transient error so the action is retried with the same keys", async () => {
+    const withFiles = await queuedEmail({ attachments: [attachment] });
+    const plain = await queuedEmail({ subject: "Plain" });
+    const first = resendAnswers((url) =>
+      url.endsWith("/emails/batch")
+        ? json({ data: [{ id: "re_plain" }] })
+        : json({ message: "unavailable" }, 503),
+    );
+    await expect(callResend([withFiles._id, plain._id])).rejects.toThrow(
+      "Resend API error",
+    );
+
+    const second = resendAnswers((url) =>
+      url.endsWith("/emails/batch")
+        ? json({ data: [{ id: "re_plain" }] })
+        : json({ id: "re_files" }),
+    );
+    const result = await callResend([withFiles._id, plain._id]);
+
+    expect(result).toEqual({
+      emailIds: [withFiles._id, plain._id],
+      resendIds: ["re_files", "re_plain"],
+    });
+    // Same requests and keys on the retry: Resend answers them with the first
+    // result instead of sending again.
+    const keys = (calls: Call[]) =>
+      calls.map((call) => [call.url, call.headers["Idempotency-Key"]]);
+    expect(keys(second)).toEqual(keys(first));
+  });
+
+  it("stores attachments with the email when sending", async () => {
+    await setupTestLastOptions(t);
+    const emailId: Id<"emails"> = await t.mutation(api.lib.sendEmail, {
+      options: {
+        apiKey: "test-key",
+        initialBackoffMs: 1000,
+        retryAttempts: 3,
+        testMode: true,
+      },
+      from: "test@resend.dev",
+      to: ["delivered@resend.dev"],
+      subject: "Test",
+      html: "<p>Test</p>",
+      attachments: [attachment],
+    });
+
+    const email = await t.run((ctx) => ctx.db.get("emails", emailId));
+    expect(email?.attachments).toEqual([attachment]);
   });
 });

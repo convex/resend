@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added optional `attachments` to `sendEmail`
+  (`{ filename, path, contentType? }[]`, files attached by URL). Resend's batch
+  endpoint does not accept attachments, so an email that has some is sent on its
+  own through `POST /emails`, in the same action as the batch, with its own
+  idempotency key. Emails without attachments are sent exactly as before.
+
 ## 0.2.9
 
 - Updates the /test entrypoint for compatibility with convex-test's new

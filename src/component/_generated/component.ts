@@ -65,6 +65,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { emailId: string },
         {
+          attachments?: Array<{
+            contentType?: string;
+            filename: string;
+            path: string;
+          }>;
           bcc?: Array<string>;
           bounced?: boolean;
           cc?: Array<string>;
@@ -137,6 +142,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
+          attachments?: Array<{
+            contentType?: string;
+            filename: string;
+            path: string;
+          }>;
           bcc?: Array<string>;
           cc?: Array<string>;
           from: string;
