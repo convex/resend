@@ -8,6 +8,10 @@ const app = defineTestApp({
   schema: defineSchema({
     events: defineTable(vOnEmailEventArgs),
   }),
+  components: {
+    resend: resendTest,
+    customResend: resendTest,
+  },
 });
 const { createTest, internal } = app.defineModules({
   callbacks: {
@@ -30,7 +34,7 @@ describe("Resend test registration", () => {
     vi.unstubAllGlobals();
   });
 
-  test.each([undefined, "customResend"])(
+  test.each(["resend", "customResend"] as const)(
     "sends queued emails and runs callbacks with component name %s",
     async (name) => {
       const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
@@ -42,7 +46,7 @@ describe("Resend test registration", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const t = createTest();
-      const component = resendTest.register(t, name);
+      const component = app.components[name];
       const resend = new Resend(component, {
         apiKey: "test-api-key",
         onEmailEvent: internal.callbacks.onEmailEvent,
