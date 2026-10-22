@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.10
+
+- Register child components in /test entrypoint (#127)
+
 ## 0.2.9
 
 - Updates the /test entrypoint for compatibility with convex-test's new
