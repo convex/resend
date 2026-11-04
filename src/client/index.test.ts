@@ -96,4 +96,39 @@ describe("Resend test registration", () => {
       expect(events[0]).toMatchObject({ id: emailId, event });
     },
   );
+
+  test("sends batches to the configured baseUrl", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: "emulated-resend-id" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const t = createTest();
+    const resend = new Resend(app.components.resend, {
+      apiKey: "test-api-key",
+      baseUrl: "http://127.0.0.1:4100",
+    });
+    const emailId = await t.run((ctx) =>
+      resend.sendEmail(ctx, {
+        from: "sender@example.com",
+        to: "delivered@resend.dev",
+        subject: "Test email",
+        text: "Hello from a local emulator",
+      }),
+    );
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.run((ctx) => resend.get(ctx, emailId))).toMatchObject({
+      status: "sent",
+      resendId: "emulated-resend-id",
+    });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "http://127.0.0.1:4100/emails/batch",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });

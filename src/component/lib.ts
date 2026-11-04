@@ -483,6 +483,7 @@ export const makeBatch = internalMutation({
       internal.lib.callResendAPIWithBatch,
       {
         apiKey: options.apiKey,
+        baseUrl: options.baseUrl,
         emails: emails.map((e) => e._id),
       },
       {
@@ -555,6 +556,7 @@ const vBatchReturns = v.union(
 export const callResendAPIWithBatch = internalAction({
   args: {
     apiKey: v.string(),
+    baseUrl: v.optional(v.string()),
     emails: v.array(v.id("emails")),
   },
   returns: vBatchReturns,
@@ -571,7 +573,8 @@ export const callResendAPIWithBatch = internalAction({
     const [emailIds, body] = batchPayload;
 
     // Make API call
-    const response = await fetch("https://api.resend.com/emails/batch", {
+    const baseUrl = args.baseUrl ?? "https://api.resend.com";
+    const response = await fetch(`${baseUrl}/emails/batch`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${args.apiKey}`,
