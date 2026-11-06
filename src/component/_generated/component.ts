@@ -145,6 +145,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           idempotencyKey?: string;
           options: {
             apiKey: string;
+            baseUrl?: string;
             initialBackoffMs: number;
             onEmailEvent?: { fnHandle: string };
             retryAttempts: number;

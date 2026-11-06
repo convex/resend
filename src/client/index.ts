@@ -58,6 +58,13 @@ export type ResendOptions = {
   apiKey?: string;
 
   /**
+   * The base URL of the Resend API, e.g. a local Resend emulator in tests.
+   * If not provided, https://api.resend.com is used. Unlike the other options,
+   * it is not read from an environment variable.
+   */
+  baseUrl?: string;
+
+  /**
    * The secret to use for the Resend webhook.
    * If not provided, the webhook secret will be read from the environment variable RESEND_WEBHOOK_SECRET.
    */
@@ -110,6 +117,7 @@ async function configToRuntimeConfig(
 ): Promise<RuntimeConfig> {
   return {
     apiKey: config.apiKey,
+    baseUrl: config.baseUrl,
     initialBackoffMs: config.initialBackoffMs,
     retryAttempts: config.retryAttempts,
     testMode: config.testMode,
@@ -233,6 +241,7 @@ export class Resend {
     const defaultConfig = getDefaultConfig();
     this.config = {
       apiKey: options?.apiKey ?? defaultConfig.apiKey,
+      baseUrl: options?.baseUrl,
       webhookSecret: options?.webhookSecret ?? defaultConfig.webhookSecret,
       initialBackoffMs:
         options?.initialBackoffMs ?? defaultConfig.initialBackoffMs,
