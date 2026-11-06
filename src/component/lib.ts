@@ -573,7 +573,8 @@ export const callResendAPIWithBatch = internalAction({
     const [emailIds, body] = batchPayload;
 
     // Make API call
-    const baseUrl = args.baseUrl ?? "https://api.resend.com";
+    const baseUrl =
+      args.baseUrl?.replace(/\/+$/, "") ?? "https://api.resend.com";
     const response = await fetch(`${baseUrl}/emails/batch`, {
       method: "POST",
       headers: {
