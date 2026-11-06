@@ -87,6 +87,7 @@
   "types": "./dist/client/index.d.ts",
   "module": "./dist/client/index.js",
   "dependencies": {
+    "@convex-dev/batch-worker": "^0.3.4",
     "@convex-dev/rate-limiter": "^0.3.0",
     "@convex-dev/workpool": "^0.4.10",
     "remeda": "^2.26.0",

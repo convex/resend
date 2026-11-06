@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import type { TestConvex } from "convex-test";
 import type { GenericSchema, SchemaDefinition } from "convex/server";
+import batchWorker from "@convex-dev/batch-worker/test";
 import rateLimiter from "@convex-dev/rate-limiter/test";
 import workpool from "@convex-dev/workpool/test";
 import type { ComponentApi } from "./component/_generated/component.js";
@@ -21,6 +22,7 @@ export function register(
   rateLimiter.register(t, `${name}/rateLimiter`);
   workpool.register(t, `${name}/emailWorkpool`);
   workpool.register(t, `${name}/callbackWorkpool`);
+  batchWorker.register(t, `${name}/batchWorker`);
   return t.registerComponent(name, schema, modules) as unknown as ComponentApi;
 }
 export default { register, schema, modules };
