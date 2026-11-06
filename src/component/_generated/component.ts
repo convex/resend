@@ -79,10 +79,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           headers?: Array<{ name: string; value: string }>;
           html?: string;
           idempotencyKey?: string;
+          insertedAt?: bigint | import("convex/values").CommitTsPlaceholder;
           opened: boolean;
           replyTo: Array<string>;
           resendId?: string;
-          segment: number;
+          segment?: number;
           status:
             | "waiting"
             | "queued"
