@@ -28,7 +28,7 @@
     "lint": "eslint . && prettier --check .",
     "test": "vitest run --typecheck",
     "check": "npm run test && npm run typecheck && npm run lint",
-    "test:e2e": "convex dev --once --typecheck-components",
+    "test:e2e": "convex init && npm run build:codegen && convex dev --once --typecheck-components",
     "format": "prettier --write .",
     "test:watch": "vitest --typecheck --clearScreen false",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
