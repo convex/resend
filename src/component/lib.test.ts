@@ -442,9 +442,7 @@ describe("sendEmail with idempotencyKey", () => {
     expect(second).toBe(first);
 
     // Only one email should have been inserted.
-    const emails = await t.run(async (ctx) =>
-      ctx.db.query("emails").collect(),
-    );
+    const emails = await t.run(async (ctx) => ctx.db.query("emails").collect());
     expect(emails.length).toBe(1);
   });
 
@@ -454,9 +452,7 @@ describe("sendEmail with idempotencyKey", () => {
 
     expect(second).not.toBe(first);
 
-    const emails = await t.run(async (ctx) =>
-      ctx.db.query("emails").collect(),
-    );
+    const emails = await t.run(async (ctx) => ctx.db.query("emails").collect());
     expect(emails.length).toBe(2);
   });
 
@@ -466,9 +462,7 @@ describe("sendEmail with idempotencyKey", () => {
 
     expect(second).not.toBe(first);
 
-    const emails = await t.run(async (ctx) =>
-      ctx.db.query("emails").collect(),
-    );
+    const emails = await t.run(async (ctx) => ctx.db.query("emails").collect());
     expect(emails.length).toBe(2);
   });
 });

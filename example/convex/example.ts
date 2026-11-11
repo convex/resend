@@ -6,7 +6,7 @@ import {
 import { components, internal } from "./_generated/api";
 import { Resend, vOnEmailEventArgs } from "@convex-dev/resend";
 import { v } from "convex/values";
-import { Resend as ResendSdk, Tag} from "resend";
+import { Resend as ResendSdk, Tag } from "resend";
 
 const resendSdk = new ResendSdk(process.env.RESEND_API_KEY!);
 
@@ -202,8 +202,10 @@ export const sendManualEmail = internalAction({
     template: v.optional(
       v.object({
         id: v.string(),
-        variables: v.optional(v.record(v.string(), v.union(v.string(), v.number()))),
-      })
+        variables: v.optional(
+          v.record(v.string(), v.union(v.string(), v.number())),
+        ),
+      }),
     ),
   },
   handler: async (ctx, args) => {
@@ -249,8 +251,10 @@ export const sendManualEmail = internalAction({
       { from, to, subject },
       async (emailId) => {
         // Set the idempotency key
-        (emailPayload.headers as Array<{ name: string; value: string }>)[0].value = emailId;
-        const {data, error} = await resendSdk.emails.send({
+        (
+          emailPayload.headers as Array<{ name: string; value: string }>
+        )[0].value = emailId;
+        const { data, error } = await resendSdk.emails.send({
           from,
           to,
           subject,

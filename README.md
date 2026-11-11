@@ -181,8 +181,8 @@ call, but it doesn't stop your application from enqueuing the same logical email
 twice (for example, when a business flow re-fires or an action is retried).
 
 To dedupe at enqueue time, pass an `idempotencyKey`. If an email with the same
-key has already been enqueued, `sendEmail` returns the existing `EmailId` instead
-of enqueuing (and delivering) a duplicate:
+key has already been enqueued, `sendEmail` returns the existing `EmailId`
+instead of enqueuing (and delivering) a duplicate:
 
 ```ts
 const emailId = await resend.sendEmail(ctx, {
@@ -220,8 +220,7 @@ await resend.sendEmail(ctx, {
 });
 ```
 
-> [!IMPORTANT]
-> You cannot use both `template` and `html`/`text` in the same
+> [!IMPORTANT] You cannot use both `template` and `html`/`text` in the same
 > email. If you need to send dynamic HTML content, either use templates with
 > template variables, or use the `html`/`text` fields directly (optionally with
 > [React Email](#using-react-email)).
@@ -384,8 +383,8 @@ export const sendEmail = action({
 });
 ```
 
-> [!WARNING]
-> React Email requires some Node dependencies thus it must run in a Convex
+> [!WARNING] React Email requires some Node dependencies thus it must run in a
+> Convex
 > [Node action](https://docs.convex.dev/functions/actions#choosing-the-runtime-use-node)
 > and not a regular Action.
 
@@ -393,8 +392,8 @@ export const sendEmail = action({
 
 If you need something that the component doesn't provide (it is currently
 limited by what is supported by the batch API in Resend), you can send emails
-manually using `sendEmailManually`. Unlike `sendEmail` which enqueues emails
-and sends them in batches via the `/emails/batch` endpoint, `sendEmailManually`
+manually using `sendEmailManually`. Unlike `sendEmail` which enqueues emails and
+sends them in batches via the `/emails/batch` endpoint, `sendEmailManually`
 calls Resend's `/emails` endpoint directly without enqueueing. This gives you
 fine-grained control over the email sending process while still tracking its
 progress using the component's status and webhook APIs.
@@ -421,7 +420,7 @@ export const sendManualEmail = internalAction({
       ctx,
       { from, to, subject },
       async (emailId) => {
-        const {data, error} = await resendSdk.emails.send({
+        const { data, error } = await resendSdk.emails.send({
           from,
           to,
           subject,
