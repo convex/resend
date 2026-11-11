@@ -220,7 +220,9 @@ await resend.sendEmail(ctx, {
 });
 ```
 
-> [!IMPORTANT] You cannot use both `template` and `html`/`text` in the same
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> You cannot use both `template` and `html`/`text` in the same
 > email. If you need to send dynamic HTML content, either use templates with
 > template variables, or use the `html`/`text` fields directly (optionally with
 > [React Email](#using-react-email)).
@@ -383,8 +385,9 @@ export const sendEmail = action({
 });
 ```
 
-> [!WARNING] React Email requires some Node dependencies thus it must run in a
-> Convex
+<!-- prettier-ignore -->
+> [!WARNING]
+> React Email requires some Node dependencies thus it must run in a Convex
 > [Node action](https://docs.convex.dev/functions/actions#choosing-the-runtime-use-node)
 > and not a regular Action.
 
