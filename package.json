@@ -71,7 +71,7 @@
     "@types/react": "19.3.0",
     "chokidar-cli": "3.0.0",
     "convex": "1.49.0",
-    "convex-test": "0.0.67",
+    "convex-test": "0.0.69",
     "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.7",
@@ -82,7 +82,7 @@
     "react-dom": "19.3.1",
     "tsc-alias": "1.9.10",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.72.1",
+    "typescript-eslint": "8.72.2",
     "vitest": "5.1.0"
   },
   "types": "./dist/client/index.d.ts",
