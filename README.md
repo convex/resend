@@ -247,7 +247,7 @@ Use the `status` method to check an email's current state:
 ```ts
 const emailStatus = await resend.status(ctx, emailId);
 if (emailStatus) {
-  console.log(emailStatus.status); // e.g., "delivered", "bounced", "sent"
+  console.log(emailStatus.status); // e.g., "delivered", "bounced", "suppressed", "sent"
   console.log(emailStatus.bounced); // boolean
   console.log(emailStatus.failed); // boolean
   console.log(emailStatus.complained); // spam complaint (boolean)
@@ -276,19 +276,20 @@ data view. Click the drop down with a puzzle piece that says app:
    - `emailId`: Links back to the email in the emails table
    - `resendId`: Resend's ID for the email
    - `eventType`: The type of event (e.g., `email.delivered`, `email.bounced`,
-     `email.opened`, `email.clicked`, `email.complained`)
+     `email.opened`, `email.clicked`, `email.complained`, `email.suppressed`)
    - `createdAt`: When the event occurred
-   - `message`: Additional details (e.g., bounce reasons)
+   - `message`: Additional details (e.g., bounce or suppression reasons)
 
 This is useful for debugging delivery issues, viewing email history, and
 understanding what happened with each email you sent.
 
 ### Data retention
 
-This component retains "finalized" (delivered, cancelled, bounced) emails. It's
-your responsibility to clear out those emails on your own schedule. You can run
-`cleanupOldEmails` and `cleanupAbandonedEmails` from the dashboard, under the
-"resend" component tab in the function runner, or set up a cron job.
+This component retains "finalized" (delivered, cancelled, bounced, failed,
+suppressed) emails. It's your responsibility to clear out those emails on your
+own schedule. You can run `cleanupOldEmails` and `cleanupAbandonedEmails` from
+the dashboard, under the "resend" component tab in the function runner, or set
+up a cron job.
 
 If you pass no argument, it defaults to deleting emails older than 7 days.
 

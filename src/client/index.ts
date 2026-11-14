@@ -127,13 +127,15 @@ export type EmailStatus = {
    * - `cancelled`: The email has been cancelled.
    * - `sent`: The email has been sent to Resend, but we do not yet know its fate.
    * - `bounced`: The email bounced.
+   * - `failed`: The email failed to send.
+   * - `suppressed`: Resend didn't send the email because the recipient is on your suppression list.
    * - `delivered`: The email was delivered successfully.
    * - `delivery_delayed`: Resend is having trouble delivering the email, but is still trying.
    */
   status: Status;
 
   /**
-   * The error message of the email. Typically only set on bounces.
+   * The error message of the email. Typically only set on bounces, failures and suppressions.
    */
   errorMessage: string | null;
 

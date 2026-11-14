@@ -91,7 +91,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "delivered"
             | "delivery_delayed"
             | "bounced"
-            | "failed";
+            | "failed"
+            | "suppressed";
           subject?: string;
           template?: {
             id: string;
@@ -122,7 +123,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "delivered"
             | "delivery_delayed"
             | "bounced"
-            | "failed";
+            | "failed"
+            | "suppressed";
         } | null,
         Name
       >;
@@ -177,7 +179,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "delivered"
             | "delivery_delayed"
             | "bounced"
-            | "failed";
+            | "failed"
+            | "suppressed";
         },
         null,
         Name

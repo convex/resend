@@ -170,6 +170,56 @@ describe("handleEmailEvent", () => {
     expect(updatedEmail.opened).toBe(false); // Should remain unchanged
   });
 
+  it("updates email for suppressed event", async () => {
+    expect(email.status).toBe("sent");
+    event = createTestEventOfType("email.suppressed");
+
+    await exec();
+
+    const updatedEmail = await getEmail();
+    expect(updatedEmail.status).toBe("suppressed");
+    expect(updatedEmail.errorMessage).toBe(
+      "The recipient's email address is on the suppression list",
+    );
+    expect(updatedEmail.finalizedAt).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    expect(updatedEmail.bounced).toBeFalsy();
+    // deliveryEvents entry created
+    const events = await t.run(async (ctx) =>
+      ctx.db
+        .query("deliveryEvents")
+        .withIndex("by_emailId_eventType", (q) =>
+          q.eq("emailId", email._id).eq("eventType", "email.suppressed"),
+        )
+        .collect(),
+    );
+    expect(events.length).toBe(1);
+    expect(events[0].message).toBe(
+      "The recipient's email address is on the suppression list",
+    );
+  });
+
+  it("updates email for suppressed event without a reason", async () => {
+    const { data, ...rest } = createTestEventOfType("email.suppressed");
+
+    await exec({ ...rest, data: { ...data, suppressed: undefined } });
+
+    const updatedEmail = await getEmail();
+    expect(updatedEmail.status).toBe("suppressed");
+    expect(updatedEmail.errorMessage).toBeUndefined();
+  });
+
+  it("does not update cancelled email for suppressed event", async () => {
+    await t.run(async (ctx) =>
+      ctx.db.patch("emails", email._id, { status: "cancelled" }),
+    );
+    event = createTestEventOfType("email.suppressed");
+
+    await exec();
+
+    const updatedEmail = await getEmail();
+    expect(updatedEmail.status).toBe("cancelled");
+  });
+
   it("gracefully handles invalid event structure - missing type", async () => {
     const invalidEvent = {
       created_at: "2024-01-01T00:00:00Z",
@@ -263,6 +313,39 @@ describe("vEmailEvent parsing", () => {
 
     expect(result.data.data.message_id).toBe("<test-message-id@example.com>");
     expect("some_future_resend_field" in result.data.data).toBe(false);
+  });
+});
+
+describe("sendEmail in test mode", () => {
+  let t: Tester;
+
+  beforeEach(async () => {
+    t = setupTest();
+    await setupTestLastOptions(t);
+  });
+
+  const send = (to: string) =>
+    t.mutation(api.lib.sendEmail, {
+      options: {
+        apiKey: "test-key",
+        initialBackoffMs: 1000,
+        retryAttempts: 3,
+        testMode: true,
+      },
+      from: "test@resend.dev",
+      to: [to],
+      subject: "Test",
+      html: "<p>Test</p>",
+    });
+
+  it("accepts Resend's suppression test address", async () => {
+    await expect(send("suppressed@resend.dev")).resolves.toBeDefined();
+  });
+
+  it("rejects a label on the suppression test address", async () => {
+    await expect(send("suppressed+label@resend.dev")).rejects.toThrow(
+      "Test mode is enabled",
+    );
   });
 });
 
