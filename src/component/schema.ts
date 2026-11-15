@@ -15,6 +15,9 @@ export default defineSchema({
   lastOptions: defineTable({
     options: vOptions,
   }),
+  emailOptions: defineTable({
+    options: vOptions,
+  }).index("by_apiKey", ["options.apiKey"]),
   deliveryEvents: defineTable({
     emailId: v.id("emails"),
     resendId: v.string(),
@@ -50,6 +53,7 @@ export default defineSchema({
     clicked: v.optional(v.boolean()),
     resendId: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
+    optionsId: v.optional(v.id("emailOptions")),
     segment: v.number(),
     finalizedAt: v.number(),
   })

@@ -96,4 +96,128 @@ describe("Resend test registration", () => {
       expect(events[0]).toMatchObject({ id: emailId, event });
     },
   );
+
+  // Mock the Resend batch API, returning ids like "<apiKey>-<index>".
+  const mockFetch = () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (_input, init) => {
+        const headers = init?.headers as Record<string, string>;
+        const apiKey = headers.Authorization.replace("Bearer ", "");
+        const body = JSON.parse(init?.body as string) as unknown[];
+        return new Response(
+          JSON.stringify({
+            data: body.map((_, i) => ({ id: `${apiKey}-${i}` })),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  };
+
+  const deliveredEvent = (resendId: string): EmailEvent => ({
+    type: "email.delivered",
+    created_at: new Date().toISOString(),
+    data: {
+      created_at: new Date().toISOString(),
+      email_id: resendId,
+      from: "sender@example.com",
+      to: ["delivered@resend.dev"],
+      subject: "Test email",
+    },
+  });
+
+  test("keeps each caller's options when callers share a component", async () => {
+    const fetchMock = mockFetch();
+    const t = createTest();
+    const component = app.components.resend;
+    const appResend = new Resend(component, {
+      apiKey: "re_app",
+      onEmailEvent: internal.callbacks.onEmailEvent,
+    });
+    // Another caller of the same component, without onEmailEvent.
+    const authResend = new Resend(component, { apiKey: "re_auth" });
+
+    const appEmailId = await t.run((ctx) =>
+      appResend.sendEmail(ctx, {
+        from: "sender@example.com",
+        to: "delivered@resend.dev",
+        subject: "App email",
+        text: "Hello from the app",
+      }),
+    );
+    const authEmailId = await t.run((ctx) =>
+      authResend.sendEmail(ctx, {
+        from: "sender@example.com",
+        to: "delivered+auth@resend.dev",
+        subject: "Auth email",
+        text: "Hello from auth",
+      }),
+    );
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    // Each email is sent with its own caller's API key.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await t.run((ctx) => appResend.get(ctx, appEmailId))).toMatchObject({
+      status: "sent",
+      resendId: "re_app-0",
+    });
+    expect(
+      await t.run((ctx) => authResend.get(ctx, authEmailId)),
+    ).toMatchObject({ status: "sent", resendId: "re_auth-0" });
+    expect(
+      await t.run((ctx) => appResend.get(ctx, appEmailId)),
+    ).not.toHaveProperty("optionsId");
+
+    // The app's callback still runs for the app's email, and not for auth's.
+    const appEvent = deliveredEvent("re_app-0");
+    await t.mutation(component.lib.handleEmailEvent, { event: appEvent });
+    await t.mutation(component.lib.handleEmailEvent, {
+      event: deliveredEvent("re_auth-0"),
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const events = await t.run((ctx) => ctx.db.query("events").collect());
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ id: appEmailId, event: appEvent });
+  });
+
+  test("runs callbacks for manual emails using the last options", async () => {
+    mockFetch();
+    const t = createTest();
+    const component = app.components.resend;
+    const resend = new Resend(component, {
+      apiKey: "re_app",
+      onEmailEvent: internal.callbacks.onEmailEvent,
+    });
+    await t.run((ctx) =>
+      resend.sendEmail(ctx, {
+        from: "sender@example.com",
+        to: "delivered@resend.dev",
+        subject: "App email",
+        text: "Hello from the app",
+      }),
+    );
+    const manualEmailId = await t.run((ctx) =>
+      resend.sendEmailManually(
+        ctx,
+        {
+          from: "sender@example.com",
+          to: "delivered@resend.dev",
+          subject: "Manual email",
+        },
+        async () => "manual-resend-id",
+      ),
+    );
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const event = deliveredEvent("manual-resend-id");
+    await t.mutation(component.lib.handleEmailEvent, { event });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const events = await t.run((ctx) => ctx.db.query("events").collect());
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ id: manualEmailId, event });
+  });
 });
