@@ -71,7 +71,7 @@
     "@types/react": "19.3.0",
     "chokidar-cli": "3.0.0",
     "convex": "1.49.0",
-    "convex-test": "0.0.69",
+    "convex-test": "0.0.70",
     "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.7",
