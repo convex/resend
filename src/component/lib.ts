@@ -26,7 +26,7 @@ import type { EmailEvent } from "./shared.js";
 import { isDeepEqual } from "remeda";
 import schema from "./schema.js";
 import { omit } from "convex-helpers";
-import { doc, parse } from "convex-helpers/validators";
+import { parse } from "convex-helpers/validators";
 import { assertExhaustive, attemptToParse } from "./utils.js";
 
 // Move some of these to options? TODO
@@ -424,7 +424,7 @@ async function pingEmailWorker(ctx: MutationCtx) {
 
 const { vQueryArgs, vQueryReturns, vMutationArgs, vMutationReturns } =
   defineBatchWorkerValidators({
-    batch: { emails: v.array(doc(schema, "emails")) },
+    batch: { emailIds: v.array(v.id("emails")) },
   });
 
 // Decide the next batch of emails to send, or report that the queue is empty.
@@ -447,7 +447,7 @@ export const nextEmailBatch = internalQuery({
     }
     return {
       kind: "work" as const,
-      batch: { emails },
+      batch: { emailIds: emails.map((e) => e._id) },
       // Emails from older versions have no insertedAt and sort first; for
       // those, undefined leaves the cursor where it was until they drain.
       cursor: emails[emails.length - 1].insertedAt,
@@ -460,7 +460,7 @@ export const nextEmailBatch = internalQuery({
 export const sendEmailBatch = internalMutation({
   args: vMutationArgs,
   returns: vMutationReturns,
-  handler: async (ctx, { emails }) => {
+  handler: async (ctx, { emailIds }) => {
     // Get the API key for the worker.
     const lastOptions = await ctx.db.query("lastOptions").unique();
     if (!lastOptions) {
@@ -468,16 +468,25 @@ export const sendEmailBatch = internalMutation({
     }
     const options = lastOptions.options;
 
-    console.log(`Making a batch of ${emails.length} emails`);
-
-    // Mark the emails as queued. The batch comes from the same db snapshot as
-    // this mutation, and patching takes a read dependency on each doc, so a
-    // concurrent cancellation conflicts and re-runs the whole loop iteration.
-    for (const email of emails) {
-      await ctx.db.patch("emails", email._id, {
-        status: "queued",
-      });
+    // The work query reads a stale snapshot, which may be older than this
+    // mutation's, so an email in the batch may since have been cancelled or
+    // queued by an earlier iteration. Only send the ones still waiting.
+    const emails: Id<"emails">[] = [];
+    for (const emailId of emailIds) {
+      const email = await ctx.db.get("emails", emailId);
+      if (email?.status !== "waiting") continue;
+      await ctx.db.patch("emails", emailId, { status: "queued" });
+      emails.push(emailId);
     }
+    // Full batch: drain immediately. Short batch: the queue is empty, so
+    // debounce to let the next burst accumulate.
+    const next =
+      emailIds.length === BATCH_SIZE ? null : { debounceMs: BASE_BATCH_DELAY };
+    if (emails.length === 0) {
+      return next;
+    }
+
+    console.log(`Making a batch of ${emails.length} emails`);
 
     // Okay, let's calculate rate limiting as best we can globally in this distributed system.
     const delay = await getDelay(ctx);
@@ -489,7 +498,7 @@ export const sendEmailBatch = internalMutation({
       internal.lib.callResendAPIWithBatch,
       {
         apiKey: options.apiKey,
-        emails: emails.map((e) => e._id),
+        emails,
       },
       {
         retry: {
@@ -498,16 +507,12 @@ export const sendEmailBatch = internalMutation({
           base: 2,
         },
         runAfter: delay,
-        context: { emailIds: emails.map((e) => e._id) },
+        context: { emailIds: emails },
         onComplete: internal.lib.onEmailComplete,
       },
     );
 
-    // Full batch: drain immediately. Short batch: the queue is empty, so
-    // debounce to let the next burst accumulate.
-    return emails.length === BATCH_SIZE
-      ? null
-      : { debounceMs: BASE_BATCH_DELAY };
+    return next;
   },
 });
 

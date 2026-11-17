@@ -5,7 +5,7 @@ import batchWorker from "@convex-dev/batch-worker/test";
 import workpool from "@convex-dev/workpool/test";
 import rateLimiter from "@convex-dev/rate-limiter/test";
 import schema from "./schema.js";
-import { api } from "./_generated/api.js";
+import { api, internal } from "./_generated/api.js";
 import { createTestRuntimeConfig, modules } from "./setup.test.js";
 
 // Register every child component so we can drive the whole pipeline:
@@ -120,5 +120,43 @@ describe("email batching pipeline", () => {
     const email = await t.run(async (ctx) => ctx.db.get("emails", emailId));
     expect(email?.status).toBe("cancelled");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips batch entries that are no longer waiting", async () => {
+    vi.useFakeTimers();
+    const t = setupPipelineTest();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [{ id: "re_batch_789" }] }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const send = (subject: string) =>
+      t.mutation(api.lib.sendEmail, {
+        options: createTestRuntimeConfig(),
+        from: "onboarding@resend.dev",
+        to: ["delivered@resend.dev"],
+        subject,
+        html: "<p>Hi there</p>",
+      });
+    const cancelledId = await send("Cancelled");
+    const sentId = await send("Sent");
+    await t.mutation(api.lib.cancelEmail, { emailId: cancelledId });
+
+    // A stale work query can hand out emails that were cancelled, or queued
+    // by the previous iteration, after its snapshot.
+    const emailIds = [cancelledId, sentId];
+    await t.mutation(internal.lib.sendEmailBatch, { emailIds });
+    await t.mutation(internal.lib.sendEmailBatch, { emailIds });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const [cancelled, sent] = await t.run(async (ctx) => [
+      await ctx.db.get("emails", cancelledId),
+      await ctx.db.get("emails", sentId),
+    ]);
+    expect(cancelled?.status).toBe("cancelled");
+    expect(sent?.status).toBe("sent");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
