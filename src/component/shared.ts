@@ -5,12 +5,10 @@ import {
   type GenericMutationCtx,
   type GenericQueryCtx,
 } from "convex/server";
-import { type Infer, v } from "convex/values";
+import { type Infer, v, type VString } from "convex/values";
 
-// Validator for the onEmailEvent option.
-export const onEmailEvent = v.object({
-  fnHandle: v.string(),
-});
+export type EmailId = string & { __isEmailId: true };
+export const vEmailId = v.string() as VString<EmailId>;
 
 // Validator for the status of an email.
 export const vStatus = v.union(
@@ -31,17 +29,6 @@ export const vTemplate = v.object({
   variables: v.optional(v.record(v.string(), v.union(v.string(), v.number()))),
 });
 export type Template = Infer<typeof vTemplate>;
-
-// Validator for the runtime options used by the component.
-export const vOptions = v.object({
-  initialBackoffMs: v.number(),
-  retryAttempts: v.number(),
-  apiKey: v.string(),
-  testMode: v.boolean(),
-  onEmailEvent: v.optional(onEmailEvent),
-});
-
-export type RuntimeConfig = Infer<typeof vOptions>;
 
 const commonFields = {
   broadcast_id: v.optional(v.string()),
@@ -160,6 +147,35 @@ export const ACCEPTED_EVENT_TYPES = [
 export const vEventType = v.union(literals(...ACCEPTED_EVENT_TYPES));
 
 export type EmailEvent = Infer<typeof vEmailEvent>;
+
+export const vOnEmailEvent = v.function({
+  fnType: "mutation",
+  args: { id: vEmailId, event: vEmailEvent },
+  returns: v.any(),
+});
+
+export const DEFAULT_CONFIG = {
+  testMode: true,
+  initialBackoffMs: 30000,
+  retryAttempts: 5,
+};
+
+// The arguments a parent passes in `app.use(resend, { args })`. Each one is
+// optional, defaulting to DEFAULT_CONFIG, so `app.use(resend)` keeps working.
+export const vInitArgs = {
+  testMode: v.optional(v.boolean()),
+  initialBackoffMs: v.optional(v.number()),
+  retryAttempts: v.optional(v.number()),
+  onEmailEvent: v.optional(vOnEmailEvent),
+};
+
+export const vConfig = v.object({
+  testMode: v.boolean(),
+  initialBackoffMs: v.number(),
+  retryAttempts: v.number(),
+  onEmailEvent: v.optional(vOnEmailEvent),
+});
+export type Config = Infer<typeof vConfig>;
 export type EventEventTypes = EmailEvent["type"];
 export type EventEventOfType<T extends EventEventTypes> = Extract<
   EmailEvent,

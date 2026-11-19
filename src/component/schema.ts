@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { vEventType, vOptions, vStatus, vTemplate } from "./shared.js";
+import { vConfig, vEventType, vStatus, vTemplate } from "./shared.js";
 
 export default defineSchema({
   content: defineTable({
@@ -12,9 +12,7 @@ export default defineSchema({
   nextBatchRun: defineTable({
     runId: v.id("_scheduled_functions"),
   }),
-  lastOptions: defineTable({
-    options: vOptions,
-  }),
+  config: defineTable(vConfig),
   deliveryEvents: defineTable({
     emailId: v.id("emails"),
     resendId: v.string(),

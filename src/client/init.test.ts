@@ -1,0 +1,126 @@
+/// <reference types="vite/client" />
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { convexTest } from "convex-test";
+import { components } from "../../example/convex/_generated/api.js";
+import exampleSchema from "../../example/convex/schema.js";
+import resendTest from "../test.js";
+import type { EmailEvent } from "./index.js";
+
+const exampleModules = import.meta.glob("../../example/convex/**/*.*s");
+
+function setup(componentArgs?: Record<string, Record<string, unknown>>) {
+  const t = convexTest({
+    schema: exampleSchema,
+    modules: exampleModules,
+    componentArgs,
+  });
+  resendTest.register(t);
+  return t;
+}
+
+function readConfig(t: ReturnType<typeof setup>) {
+  return t.runInComponent("resend", (ctx) => ctx.db.query("config").unique());
+}
+
+describe("resend init", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubEnv("RESEND_API_KEY", "test-api-key");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  test("stores the args from the example's convex.config", async () => {
+    const t = setup();
+    expect(await readConfig(t)).toMatchObject({
+      testMode: true,
+      initialBackoffMs: 30000,
+      retryAttempts: 5,
+      onEmailEvent: "function://;example:handleEmailEvent",
+    });
+  });
+
+  test("runs again on each push and replaces the config", async () => {
+    const t = setup();
+    await t.runInits();
+    const configs = await t.runInComponent("resend", (ctx) =>
+      ctx.db.query("config").collect(),
+    );
+    expect(configs).toHaveLength(1);
+  });
+
+  test("calls the app's onEmailEvent handle on a webhook event", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ data: [{ id: "resend-id-1" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const t = setup();
+    const emailId = await t.mutation(components.resend.lib.sendEmail, {
+      from: "sender@example.com",
+      to: ["delivered@resend.dev"],
+      subject: "Hi",
+      text: "Hello",
+    });
+    await t.run((ctx) =>
+      ctx.db.insert("testEmails", {
+        email: emailId,
+        expectation: "delivered",
+      }),
+    );
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const event: EmailEvent = {
+      type: "email.delivered",
+      created_at: new Date().toISOString(),
+      data: {
+        created_at: new Date().toISOString(),
+        email_id: "resend-id-1",
+        from: "sender@example.com",
+        to: ["delivered@resend.dev"],
+        subject: "Hi",
+      },
+    };
+    await t.mutation(components.resend.lib.handleEmailEvent, { event });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    // example.handleEmailEvent deletes a delivered email's expectation.
+    expect(await t.run((ctx) => ctx.db.query("testEmails").collect())).toEqual(
+      [],
+    );
+  });
+
+  test("enforces testMode from the init args", async () => {
+    const t = setup();
+    await expect(
+      t.mutation(components.resend.lib.sendEmail, {
+        from: "sender@example.com",
+        to: ["someone@example.com"],
+        subject: "Hi",
+        text: "Hello",
+      }),
+    ).rejects.toThrow(/Test mode is enabled/);
+  });
+
+  test("componentArgs override the convex.config args", async () => {
+    const t = setup({ resend: { testMode: false } });
+    expect(await readConfig(t)).toEqual(
+      expect.objectContaining({ testMode: false }),
+    );
+    expect((await readConfig(t))?.onEmailEvent).toBeUndefined();
+    await t.mutation(components.resend.lib.sendEmail, {
+      from: "sender@example.com",
+      to: ["someone@example.com"],
+      subject: "Hi",
+      text: "Hello",
+    });
+  });
+});

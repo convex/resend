@@ -70,7 +70,7 @@
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "chokidar-cli": "3.0.0",
-    "convex": "1.50.0",
+    "convex": "https://pkg.pr.new/convex/convex@5d68b26",
     "convex-test": "0.0.71",
     "eslint": "10.15.0",
     "eslint-plugin-react-hooks": "7.1.1",

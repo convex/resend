@@ -1,10 +1,6 @@
 /// <reference types="vite/client" />
 import { test } from "vitest";
-import type {
-  EventEventOfType,
-  EventEventTypes,
-  RuntimeConfig,
-} from "./shared.js";
+import type { EventEventOfType, EventEventTypes, Config } from "./shared.js";
 import { convexTest } from "convex-test";
 import schema from "./schema.js";
 import type { Doc } from "./_generated/dataModel.js";
@@ -151,22 +147,12 @@ export const createTestEventOfType = <T extends EventEventTypes>(
   return assertExhaustive(type);
 };
 
-export const createTestRuntimeConfig = (): RuntimeConfig => ({
-  apiKey: "test-api-key",
-  testMode: true,
-  initialBackoffMs: 1000,
-  retryAttempts: 3,
-});
-
-export const setupTestLastOptions = (
-  t: Tester,
-  overrides?: Partial<Doc<"lastOptions">>,
-) =>
+export const setupTestConfig = (t: Tester, overrides?: Partial<Config>) =>
   t.run(async (ctx) => {
-    await ctx.db.insert("lastOptions", {
-      options: {
-        ...createTestRuntimeConfig(),
-      },
+    await ctx.db.insert("config", {
+      testMode: true,
+      initialBackoffMs: 1000,
+      retryAttempts: 3,
       ...overrides,
     });
   });

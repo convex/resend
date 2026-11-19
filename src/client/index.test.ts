@@ -9,8 +9,18 @@ const app = defineTestApp({
     events: defineTable(vOnEmailEventArgs),
   }),
   components: {
-    resend: resendTest,
-    customResend: resendTest,
+    resend: {
+      register: (t, name) =>
+        resendTest.register(t, name, {
+          onEmailEvent: internal.callbacks.onEmailEvent,
+        }),
+    },
+    customResend: {
+      register: (t, name) =>
+        resendTest.register(t, name, {
+          onEmailEvent: internal.callbacks.onEmailEvent,
+        }),
+    },
   },
 });
 const { createTest, internal } = app.defineModules({
@@ -27,11 +37,13 @@ const { createTest, internal } = app.defineModules({
 describe("Resend test registration", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubEnv("RESEND_API_KEY", "test-api-key");
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   test.each(["resend", "customResend"] as const)(
@@ -47,10 +59,7 @@ describe("Resend test registration", () => {
 
       const t = createTest();
       const component = app.components[name];
-      const resend = new Resend(component, {
-        apiKey: "test-api-key",
-        onEmailEvent: internal.callbacks.onEmailEvent,
-      });
+      const resend = new Resend(component);
       const emailId = await t.run((ctx) =>
         resend.sendEmail(ctx, {
           from: "sender@example.com",
