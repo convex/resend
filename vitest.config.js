@@ -1,14 +1,6 @@
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      "convex-test": fileURLToPath(
-        import.meta.resolve("./vendor/convex-test-init/index.ts"),
-      ),
-    },
-  },
   test: {
     environment: "edge-runtime",
     // convex-test loads each component's convex.config, and published

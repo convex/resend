@@ -1,12 +1,12 @@
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTest } from "convex-test";
-import { components } from "../../example/convex/_generated/api.js";
-import exampleSchema from "../../example/convex/schema.js";
-import resendTest from "../test.js";
-import type { EmailEvent } from "./index.js";
+import { components } from "./_generated/api.js";
+import exampleSchema from "./schema.js";
+import resendTest from "../../src/test.js";
+import type { EmailEvent } from "../../src/client/index.js";
 
-const exampleModules = import.meta.glob("../../example/convex/**/*.*s");
+const exampleModules = import.meta.glob("./**/*.*s");
 
 function setup(componentArgs?: Record<string, Record<string, unknown>>) {
   const t = convexTest({
@@ -18,8 +18,16 @@ function setup(componentArgs?: Record<string, Record<string, unknown>>) {
   return t;
 }
 
+// `runInComponent` isn't in convex-test's public types.
+function inResend<T>(
+  t: ReturnType<typeof setup>,
+  fn: (ctx: any) => Promise<T>,
+): Promise<T> {
+  return (t as any).runInComponent("resend", fn);
+}
+
 function readConfig(t: ReturnType<typeof setup>) {
-  return t.runInComponent("resend", (ctx) => ctx.db.query("config").unique());
+  return inResend<any>(t, (ctx) => ctx.db.query("config").unique());
 }
 
 describe("resend init", () => {
@@ -47,7 +55,7 @@ describe("resend init", () => {
   test("runs again on each push and replaces the config", async () => {
     const t = setup();
     await t.runInits();
-    const configs = await t.runInComponent("resend", (ctx) =>
+    const configs = await inResend(t, (ctx) =>
       ctx.db.query("config").collect(),
     );
     expect(configs).toHaveLength(1);

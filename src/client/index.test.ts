@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { defineSchema, defineTable } from "convex/server";
-import { defineTestApp } from "convex-test";
+import { type ComponentRegistration, defineTestApp } from "convex-test";
 import { Resend, vOnEmailEventArgs, type EmailEvent } from "./index.js";
 import resendTest from "../test.js";
+
+const registerResend: ComponentRegistration<
+  ReturnType<typeof resendTest.register>
+> = (t, name) =>
+  resendTest.register(t, name, {
+    onEmailEvent: internal.callbacks.onEmailEvent,
+  });
 
 const app = defineTestApp({
   schema: defineSchema({
@@ -10,16 +17,10 @@ const app = defineTestApp({
   }),
   components: {
     resend: {
-      register: (t, name) =>
-        resendTest.register(t, name, {
-          onEmailEvent: internal.callbacks.onEmailEvent,
-        }),
+      register: registerResend,
     },
     customResend: {
-      register: (t, name) =>
-        resendTest.register(t, name, {
-          onEmailEvent: internal.callbacks.onEmailEvent,
-        }),
+      register: registerResend,
     },
   },
 });
