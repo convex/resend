@@ -10,6 +10,11 @@ import { type Infer, v, type VString } from "convex/values";
 export type EmailId = string & { __isEmailId: true };
 export const vEmailId = v.string() as VString<EmailId>;
 
+// Validator for the onEmailEvent option.
+export const onEmailEvent = v.object({
+  fnHandle: v.string(),
+});
+
 // Validator for the status of an email.
 export const vStatus = v.union(
   v.literal("waiting"),
@@ -29,6 +34,17 @@ export const vTemplate = v.object({
   variables: v.optional(v.record(v.string(), v.union(v.string(), v.number()))),
 });
 export type Template = Infer<typeof vTemplate>;
+
+// Validator for the runtime options used by the component.
+export const vOptions = v.object({
+  initialBackoffMs: v.number(),
+  retryAttempts: v.number(),
+  apiKey: v.string(),
+  testMode: v.boolean(),
+  onEmailEvent: v.optional(onEmailEvent),
+});
+
+export type RuntimeConfig = Infer<typeof vOptions>;
 
 const commonFields = {
   broadcast_id: v.optional(v.string()),
@@ -148,34 +164,24 @@ export const vEventType = v.union(literals(...ACCEPTED_EVENT_TYPES));
 
 export type EmailEvent = Infer<typeof vEmailEvent>;
 
-export const vOnEmailEvent = v.function({
-  fnType: "mutation",
-  args: { id: vEmailId, event: vEmailEvent },
-  returns: v.any(),
-});
-
-export const DEFAULT_CONFIG = {
-  testMode: true,
-  initialBackoffMs: 30000,
-  retryAttempts: 5,
-};
-
-// The arguments a parent passes in `app.use(resend, { args })`. Each one is
-// optional, defaulting to DEFAULT_CONFIG, so `app.use(resend)` keeps working.
-export const vInitArgs = {
+/**
+ * The arguments a parent passes in `app.use(resend, { args })`, stored verbatim
+ * on the `config` document. Each one wins over the matching per-call option
+ * from the `Resend` client, so installs that pass no args behave as before.
+ */
+export const vInitArgs = v.object({
   testMode: v.optional(v.boolean()),
   initialBackoffMs: v.optional(v.number()),
   retryAttempts: v.optional(v.number()),
-  onEmailEvent: v.optional(vOnEmailEvent),
-};
-
-export const vConfig = v.object({
-  testMode: v.boolean(),
-  initialBackoffMs: v.number(),
-  retryAttempts: v.number(),
-  onEmailEvent: v.optional(vOnEmailEvent),
+  onEmailEvent: v.optional(
+    v.function({
+      fnType: "mutation",
+      args: { id: vEmailId, event: vEmailEvent },
+      returns: v.any(),
+    }),
+  ),
 });
-export type Config = Infer<typeof vConfig>;
+export type InitArgs = Infer<typeof vInitArgs>;
 export type EventEventTypes = EmailEvent["type"];
 export type EventEventOfType<T extends EventEventTypes> = Extract<
   EmailEvent,

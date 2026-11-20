@@ -30,6 +30,17 @@ function readConfig(t: ReturnType<typeof setup>) {
   return inResend<any>(t, (ctx) => ctx.db.query("config").unique());
 }
 
+// What the `Resend` client passes on each call, which init args override.
+function clientOptions(overrides?: { testMode?: boolean }) {
+  return {
+    apiKey: "test-api-key",
+    initialBackoffMs: 30000,
+    retryAttempts: 5,
+    testMode: true,
+    ...overrides,
+  };
+}
+
 describe("resend init", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -46,19 +57,18 @@ describe("resend init", () => {
     const t = setup();
     expect(await readConfig(t)).toMatchObject({
       testMode: true,
-      initialBackoffMs: 30000,
-      retryAttempts: 5,
       onEmailEvent: "function://;example:handleEmailEvent",
     });
   });
 
-  test("runs again on each push and replaces the config", async () => {
+  test("leaves the config document alone on a push with the same args", async () => {
     const t = setup();
+    const before = await readConfig(t);
     await t.runInits();
     const configs = await inResend(t, (ctx) =>
       ctx.db.query("config").collect(),
     );
-    expect(configs).toHaveLength(1);
+    expect(configs).toEqual([before]);
   });
 
   test("calls the app's onEmailEvent handle on a webhook event", async () => {
@@ -73,6 +83,7 @@ describe("resend init", () => {
     );
     const t = setup();
     const emailId = await t.mutation(components.resend.lib.sendEmail, {
+      options: clientOptions(),
       from: "sender@example.com",
       to: ["delivered@resend.dev"],
       subject: "Hi",
@@ -106,10 +117,11 @@ describe("resend init", () => {
     );
   });
 
-  test("enforces testMode from the init args", async () => {
+  test("testMode from the init args wins over the client's option", async () => {
     const t = setup();
     await expect(
       t.mutation(components.resend.lib.sendEmail, {
+        options: clientOptions({ testMode: false }),
         from: "sender@example.com",
         to: ["someone@example.com"],
         subject: "Hi",
@@ -125,6 +137,7 @@ describe("resend init", () => {
     );
     expect((await readConfig(t))?.onEmailEvent).toBeUndefined();
     await t.mutation(components.resend.lib.sendEmail, {
+      options: clientOptions({ testMode: true }),
       from: "sender@example.com",
       to: ["someone@example.com"],
       subject: "Hi",

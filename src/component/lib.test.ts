@@ -6,7 +6,7 @@ import {
   createTestEventOfType,
   insertTestSentEmail,
   setupTest,
-  setupTestConfig,
+  setupTestLastOptions,
   type Tester,
 } from "./setup.test.js";
 import { type Doc, type Id } from "./_generated/dataModel.js";
@@ -19,7 +19,7 @@ describe("handleEmailEvent", () => {
   beforeEach(async () => {
     t = setupTest();
     event = createTestEventOfType("email.delivered");
-    await setupTestConfig(t);
+    await setupTestLastOptions(t);
     email = await insertTestSentEmail(t);
   });
 
@@ -271,11 +271,17 @@ describe("sendEmail with templates", () => {
 
   beforeEach(async () => {
     t = setupTest();
-    await setupTestConfig(t);
+    await setupTestLastOptions(t);
   });
 
   it("should accept template-based email", async () => {
     const emailId: Id<"emails"> = await t.mutation(api.lib.sendEmail, {
+      options: {
+        apiKey: "test-key",
+        initialBackoffMs: 1000,
+        retryAttempts: 3,
+        testMode: true,
+      },
       from: "test@resend.dev",
       to: ["delivered@resend.dev"],
       template: {
@@ -307,6 +313,12 @@ describe("sendEmail with templates", () => {
   it("should reject email with both template and html/text", async () => {
     await expect(
       t.mutation(api.lib.sendEmail, {
+        options: {
+          apiKey: "test-key",
+          initialBackoffMs: 1000,
+          retryAttempts: 3,
+          testMode: true,
+        },
         from: "test@resend.dev",
         to: ["delivered@resend.dev"],
         subject: "Test",
@@ -323,6 +335,12 @@ describe("sendEmail with templates", () => {
 
   it("should accept template email with optional subject", async () => {
     const emailId: Id<"emails"> = await t.mutation(api.lib.sendEmail, {
+      options: {
+        apiKey: "test-key",
+        initialBackoffMs: 1000,
+        retryAttempts: 3,
+        testMode: true,
+      },
       from: "test@resend.dev",
       to: ["delivered@resend.dev"],
       subject: "Custom Subject Override",
@@ -351,6 +369,12 @@ describe("sendEmail with templates", () => {
   it("should reject email without content or template", async () => {
     await expect(
       t.mutation(api.lib.sendEmail, {
+        options: {
+          apiKey: "test-key",
+          initialBackoffMs: 1000,
+          retryAttempts: 3,
+          testMode: true,
+        },
         from: "test@resend.dev",
         to: ["delivered@resend.dev"],
       }),
@@ -360,6 +384,12 @@ describe("sendEmail with templates", () => {
   it("should reject traditional email without subject", async () => {
     await expect(
       t.mutation(api.lib.sendEmail, {
+        options: {
+          apiKey: "test-key",
+          initialBackoffMs: 1000,
+          retryAttempts: 3,
+          testMode: true,
+        },
         from: "test@resend.dev",
         to: ["delivered@resend.dev"],
         html: "<p>Test</p>",
@@ -371,13 +401,21 @@ describe("sendEmail with templates", () => {
 describe("sendEmail with idempotencyKey", () => {
   let t: Tester;
 
+  const baseOptions = {
+    apiKey: "test-key",
+    initialBackoffMs: 1000,
+    retryAttempts: 3,
+    testMode: true,
+  };
+
   beforeEach(async () => {
     t = setupTest();
-    await setupTestConfig(t);
+    await setupTestLastOptions(t);
   });
 
   const send = (idempotencyKey?: string) =>
     t.mutation(api.lib.sendEmail, {
+      options: baseOptions,
       from: "test@resend.dev",
       to: ["delivered@resend.dev"],
       subject: "Test",

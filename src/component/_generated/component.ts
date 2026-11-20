@@ -143,6 +143,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           headers?: Array<{ name: string; value: string }>;
           html?: string;
           idempotencyKey?: string;
+          options: {
+            apiKey: string;
+            initialBackoffMs: number;
+            onEmailEvent?: { fnHandle: string };
+            retryAttempts: number;
+            testMode: boolean;
+          };
           replyTo?: Array<string>;
           subject?: string;
           template?: {

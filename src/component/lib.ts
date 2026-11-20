@@ -16,14 +16,16 @@ import { internalMutation } from "./_generated/server.js";
 import { type Id, type Doc } from "./_generated/dataModel.js";
 import {
   ACCEPTED_EVENT_TYPES,
-  type Config,
-  DEFAULT_CONFIG,
+  type InitArgs,
+  type RuntimeConfig,
   vEmailEvent,
+  vOptions,
   vStatus,
   vTemplate,
 } from "./shared.js";
 import type { FunctionHandle } from "convex/server";
 import type { EmailEvent } from "./shared.js";
+import { isDeepEqual } from "remeda";
 import schema from "./schema.js";
 import { omit } from "convex-helpers";
 import { parse } from "convex-helpers/validators";
@@ -119,17 +121,15 @@ export const cleanupOldEmails = mutation({
   },
 });
 
-// The init writes this on every push, so it only falls back to the defaults
-// for a deployment that hasn't been pushed since resend gained an init.
-async function getConfig(ctx: QueryCtx | MutationCtx): Promise<Config> {
-  const config = await ctx.db.query("config").unique();
-  return config ?? DEFAULT_CONFIG;
+async function getConfig(ctx: QueryCtx): Promise<InitArgs> {
+  return (await ctx.db.query("config").unique()) ?? {};
 }
 
 // Enqueue an email to be send.  A background job will grab batches
 // of emails and enqueue them to be sent by the workpool.
 export const sendEmail = mutation({
   args: {
+    options: vOptions,
     from: v.string(),
     to: v.array(v.string()),
     cc: v.optional(v.array(v.string())),
@@ -167,13 +167,13 @@ export const sendEmail = mutation({
       }
     }
 
-    const config = await getConfig(ctx);
     // We only allow test emails in test mode.
-    if (config.testMode) {
+    const config = await getConfig(ctx);
+    if (config.testMode ?? args.options.testMode) {
       for (const to of [...args.to, ...(args.cc ?? []), ...(args.bcc ?? [])]) {
         if (!isTestEmail(to)) {
           throw new Error(
-            `Test mode is enabled, but email address is not a valid resend test address. Did you want to pass args: { testMode: false } in app.use(resend, ...)?`,
+            `Test mode is enabled, but email address is not a valid resend test address. Did you want to set testMode: false in your ResendOptions?`,
           );
         }
       }
@@ -239,7 +239,7 @@ export const sendEmail = mutation({
     });
 
     // Ensure there is a worker running to grab batches of emails.
-    await scheduleBatchRun(ctx);
+    await scheduleBatchRun(ctx, args.options);
     return emailId;
   },
 });
@@ -411,7 +411,19 @@ export const get = query({
 });
 
 // Ensure there is a worker running to grab batches of emails.
-async function scheduleBatchRun(ctx: MutationCtx) {
+async function scheduleBatchRun(ctx: MutationCtx, options: RuntimeConfig) {
+  // Update the last options if they've changed.
+  const lastOptions = await ctx.db.query("lastOptions").unique();
+  if (!lastOptions) {
+    await ctx.db.insert("lastOptions", {
+      options,
+    });
+  } else if (!isDeepEqual(lastOptions.options, options)) {
+    await ctx.db.replace("lastOptions", lastOptions._id, {
+      options,
+    });
+  }
+
   // Check if there is already a worker running.
   const existing = await ctx.db.query("nextBatchRun").unique();
 
@@ -438,6 +450,12 @@ export const makeBatch = internalMutation({
   args: { reloop: v.boolean(), segment: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // Get the API key for the worker.
+    const lastOptions = await ctx.db.query("lastOptions").unique();
+    if (!lastOptions) {
+      throw new Error("No last options found -- invariant");
+    }
+    const options = lastOptions.options;
     const config = await getConfig(ctx);
 
     // Grab the batch of emails to send.
@@ -473,12 +491,13 @@ export const makeBatch = internalMutation({
       ctx,
       internal.lib.callResendAPIWithBatch,
       {
+        apiKey: options.apiKey,
         emails: emails.map((e) => e._id),
       },
       {
         retry: {
-          maxAttempts: config.retryAttempts,
-          initialBackoffMs: config.initialBackoffMs,
+          maxAttempts: config.retryAttempts ?? options.retryAttempts,
+          initialBackoffMs: config.initialBackoffMs ?? options.initialBackoffMs,
           base: 2,
         },
         runAfter: delay,
@@ -544,16 +563,11 @@ const vBatchReturns = v.union(
 // Okay, finally! Let's call the Resend API with the batch of emails.
 export const callResendAPIWithBatch = internalAction({
   args: {
+    apiKey: v.string(),
     emails: v.array(v.id("emails")),
   },
   returns: vBatchReturns,
   handler: async (ctx, args) => {
-    const apiKey = env.RESEND_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "RESEND_API_KEY is not set. Pass it in `app.use(resend, { env: { RESEND_API_KEY: app.env.RESEND_API_KEY } })`.",
-      );
-    }
     // Construct the JSON payload for the Resend API from all the database values.
     const batchPayload = await createResendBatchPayload(ctx, args.emails);
 
@@ -569,7 +583,7 @@ export const callResendAPIWithBatch = internalAction({
     const response = await fetch("https://api.resend.com/emails/batch", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${env.RESEND_API_KEY ?? args.apiKey}`,
         "Content-Type": "application/json",
         "Idempotency-Key": args.emails[0].toString(),
       },
@@ -984,7 +998,11 @@ async function enqueueCallbackIfExists(
   email: Doc<"emails">,
   event: EmailEvent,
 ) {
-  const { onEmailEvent } = await getConfig(ctx);
+  const config = await getConfig(ctx);
+  // lastOptions may not exist if the user only uses sendEmailManually
+  const lastOptions = await ctx.db.query("lastOptions").unique();
+  const onEmailEvent =
+    config.onEmailEvent ?? lastOptions?.options.onEmailEvent?.fnHandle;
   if (onEmailEvent) {
     const handle = onEmailEvent as FunctionHandle<
       "mutation",
