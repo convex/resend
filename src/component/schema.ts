@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { vEventType, vOptions, vStatus, vTemplate } from "./shared.js";
+import { vEventType, vInitArgs, vStatus, vTemplate } from "./shared.js";
 
 export default defineSchema({
   content: defineTable({
@@ -12,9 +12,8 @@ export default defineSchema({
   nextBatchRun: defineTable({
     runId: v.id("_scheduled_functions"),
   }),
-  lastOptions: defineTable({
-    options: vOptions,
-  }),
+  // Singleton written by the component's init on each push that changes it.
+  config: defineTable(vInitArgs),
   deliveryEvents: defineTable({
     emailId: v.id("emails"),
     resendId: v.string(),

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as init from "../init.js";
 import type * as lib from "../lib.js";
 import type * as shared from "../shared.js";
 import type * as utils from "../utils.js";
@@ -20,6 +21,7 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
+  init: typeof init;
   lib: typeof lib;
   shared: typeof shared;
   utils: typeof utils;

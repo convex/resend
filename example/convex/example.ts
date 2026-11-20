@@ -10,9 +10,7 @@ import { Resend as ResendSdk, Tag } from "resend";
 
 const resendSdk = new ResendSdk(process.env.RESEND_API_KEY!);
 
-export const resend: Resend = new Resend(components.resend, {
-  onEmailEvent: internal.example.handleEmailEvent,
-});
+export const resend: Resend = new Resend(components.resend);
 
 export const testBatch = internalAction({
   args: {

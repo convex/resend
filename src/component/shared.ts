@@ -5,12 +5,10 @@ import {
   type GenericMutationCtx,
   type GenericQueryCtx,
 } from "convex/server";
-import { type Infer, v } from "convex/values";
+import { type Infer, v, type VString } from "convex/values";
 
-// Validator for the onEmailEvent option.
-export const onEmailEvent = v.object({
-  fnHandle: v.string(),
-});
+export type EmailId = string & { __isEmailId: true };
+export const vEmailId = v.string() as VString<EmailId>;
 
 // Validator for the status of an email.
 export const vStatus = v.union(
@@ -31,17 +29,6 @@ export const vTemplate = v.object({
   variables: v.optional(v.record(v.string(), v.union(v.string(), v.number()))),
 });
 export type Template = Infer<typeof vTemplate>;
-
-// Validator for the runtime options used by the component.
-export const vOptions = v.object({
-  initialBackoffMs: v.number(),
-  retryAttempts: v.number(),
-  apiKey: v.string(),
-  testMode: v.boolean(),
-  onEmailEvent: v.optional(onEmailEvent),
-});
-
-export type RuntimeConfig = Infer<typeof vOptions>;
 
 const commonFields = {
   broadcast_id: v.optional(v.string()),
@@ -160,6 +147,24 @@ export const ACCEPTED_EVENT_TYPES = [
 export const vEventType = v.union(literals(...ACCEPTED_EVENT_TYPES));
 
 export type EmailEvent = Infer<typeof vEmailEvent>;
+
+/**
+ * The arguments a parent passes in `app.use(resend, { args })`, stored verbatim
+ * as the `config` document. Defaults are applied when reading it.
+ */
+export const vInitArgs = v.object({
+  testMode: v.optional(v.boolean()),
+  initialBackoffMs: v.optional(v.number()),
+  retryAttempts: v.optional(v.number()),
+  onEmailEvent: v.optional(
+    v.function({
+      fnType: "mutation",
+      args: { id: vEmailId, event: vEmailEvent },
+      returns: v.any(),
+    }),
+  ),
+});
+export type InitArgs = Infer<typeof vInitArgs>;
 export type EventEventTypes = EmailEvent["type"];
 export type EventEventOfType<T extends EventEventTypes> = Extract<
   EmailEvent,

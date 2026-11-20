@@ -1,12 +1,9 @@
 import {
-  createFunctionHandle,
   internalMutationGeneric,
-  type FunctionReference,
-  type FunctionVisibility,
   type GenericDataModel,
   type GenericMutationCtx,
 } from "convex/server";
-import { v, type VString } from "convex/values";
+import { v } from "convex/values";
 import { Webhook } from "svix";
 import {
   Template,
@@ -15,109 +12,34 @@ import {
   type EmailEvent,
   type MutationCtx,
   type QueryCtx,
-  type RuntimeConfig,
   type Status,
 } from "../component/shared.js";
 import { ComponentApi } from "../component/_generated/component.js";
 
 export type ResendComponent = ComponentApi;
 
-export type EmailId = string & { __isEmailId: true };
-export const vEmailId = v.string() as VString<EmailId>;
-export {
-  vEmailEvent,
-  vOptions,
-  vStatus,
-  vTemplate,
-} from "../component/shared.js";
+import { type EmailId, vEmailId } from "../component/shared.js";
+export { type EmailId, vEmailId } from "../component/shared.js";
+export { vEmailEvent, vStatus, vTemplate } from "../component/shared.js";
 export type { EmailEvent, Status, Template } from "../component/shared.js";
 export const vOnEmailEventArgs = v.object({
   id: vEmailId,
   event: vEmailEvent,
 });
 
-type Config = RuntimeConfig & {
-  webhookSecret: string;
-};
-
-function getDefaultConfig(): Config {
-  return {
-    apiKey: process.env.RESEND_API_KEY ?? "",
-    webhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? "",
-    initialBackoffMs: 30000,
-    retryAttempts: 5,
-    testMode: true,
-  };
-}
-
+/**
+ * `testMode`, `initialBackoffMs`, `retryAttempts` and `onEmailEvent` are
+ * passed as `args` when installing the component, and the API key as its
+ * `RESEND_API_KEY` env var:
+ * `app.use(resend, { args: { testMode: false }, env: { RESEND_API_KEY: app.env.RESEND_API_KEY } })`.
+ */
 export type ResendOptions = {
-  /**
-   * The API key to use for the Resend API.
-   * If not provided, the API key will be read from the environment variable RESEND_API_KEY.
-   */
-  apiKey?: string;
-
   /**
    * The secret to use for the Resend webhook.
    * If not provided, the webhook secret will be read from the environment variable RESEND_WEBHOOK_SECRET.
    */
   webhookSecret?: string;
-
-  /**
-   * The initial backoff to use for the Resend API.
-   * If not provided, the initial backoff will be 30 seconds.
-   */
-  initialBackoffMs?: number;
-
-  /**
-   * The number of retry attempts to use for the Resend API.
-   * If not provided, the number of retry attempts will be 5.
-   */
-  retryAttempts?: number;
-
-  /**
-   * Whether to run in test mode. In test mode, only emails to
-   * resend-approved test email addresses will be sent.
-   * If not provided, the test mode will be true. You need to opt
-   * into production mode by setting testMode to false.
-   */
-  testMode?: boolean;
-
-  /**
-   * A mutation to run after an email event occurs.
-   * The mutation will be passed the email id and the event.
-   */
-  onEmailEvent?: FunctionReference<
-    "mutation",
-    FunctionVisibility,
-    {
-      id: EmailId;
-      event: EmailEvent;
-    }
-  > | null;
 };
-
-async function configToRuntimeConfig(
-  config: Config,
-  onEmailEvent?: FunctionReference<
-    "mutation",
-    FunctionVisibility,
-    {
-      id: EmailId;
-      event: EmailEvent;
-    }
-  > | null,
-): Promise<RuntimeConfig> {
-  return {
-    apiKey: config.apiKey,
-    initialBackoffMs: config.initialBackoffMs,
-    retryAttempts: config.retryAttempts,
-    testMode: config.testMode,
-    onEmailEvent: onEmailEvent
-      ? { fnHandle: await createFunctionHandle(onEmailEvent) }
-      : undefined,
-  };
-}
 
 export type EmailStatus = {
   /**
@@ -209,15 +131,7 @@ export type SendEmailOptions =
     };
 
 export class Resend {
-  public config: Config;
-  onEmailEvent?: FunctionReference<
-    "mutation",
-    FunctionVisibility,
-    {
-      id: EmailId;
-      event: EmailEvent;
-    }
-  > | null;
+  public config: { webhookSecret: string };
 
   /**
    * Creates a Resend component.
@@ -230,18 +144,10 @@ export class Resend {
     public component: ComponentApi,
     options?: ResendOptions,
   ) {
-    const defaultConfig = getDefaultConfig();
     this.config = {
-      apiKey: options?.apiKey ?? defaultConfig.apiKey,
-      webhookSecret: options?.webhookSecret ?? defaultConfig.webhookSecret,
-      initialBackoffMs:
-        options?.initialBackoffMs ?? defaultConfig.initialBackoffMs,
-      retryAttempts: options?.retryAttempts ?? defaultConfig.retryAttempts,
-      testMode: options?.testMode ?? defaultConfig.testMode,
+      webhookSecret:
+        options?.webhookSecret ?? process.env.RESEND_WEBHOOK_SECRET ?? "",
     };
-    if (options?.onEmailEvent) {
-      this.onEmailEvent = options.onEmailEvent;
-    }
   }
 
   /**
@@ -320,13 +226,7 @@ export class Resend {
           }
         : fromOrOptions;
 
-    if (this.config.apiKey === "") throw new Error("API key is not set");
-
-    // Prepare the mutation args based on whether it's a template or traditional email
-
-    // Traditional email
     const id = await ctx.runMutation(this.component.lib.sendEmail, {
-      options: await configToRuntimeConfig(this.config, this.onEmailEvent),
       ...sendEmailArgs,
       to:
         typeof sendEmailArgs.to === "string"

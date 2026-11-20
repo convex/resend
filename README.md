@@ -37,10 +37,11 @@ Next, add the component to your Convex app via `convex/convex.config.ts`:
 
 ```ts
 import { defineApp } from "convex/server";
+import { v } from "convex/values";
 import resend from "@convex-dev/resend/convex.config.js";
 
-const app = defineApp();
-app.use(resend);
+const app = defineApp({ env: { RESEND_API_KEY: v.string() } });
+app.use(resend, { env: { RESEND_API_KEY: app.env.RESEND_API_KEY } });
 
 export default app;
 ```
@@ -52,7 +53,7 @@ import { components } from "./_generated/api";
 import { Resend } from "@convex-dev/resend";
 import { internalMutation } from "./_generated/server";
 
-export const resend: Resend = new Resend(components.resend, {});
+export const resend: Resend = new Resend(components.resend);
 
 export const sendTestEmail = internalMutation({
   handler: async (ctx) => {
@@ -70,7 +71,7 @@ Then, calling `sendTestEmail` from anywhere in your app will send this test
 email.
 
 If you want to send emails to real addresses, you need to disable `testMode`.
-You can do this in `ResendOptions`,
+You can do this in the component's `args`,
 [as detailed below](#resend-component-options-and-going-into-production).
 
 A note on test email addresses:
@@ -126,16 +127,22 @@ Speaking of...
 If you have your webhook established, you can also register an event handler in
 your apps you get notifications when email statuses change.
 
-Update your `sendEmails.ts` to look something like this:
+Pass it as `onEmailEvent` in `convex/convex.config.ts`:
 
 ```ts
-import { components, internal } from "./_generated/api";
-import { internalMutation } from "./_generated/server";
-import { vEmailId, vEmailEvent, Resend } from "@convex-dev/resend";
+import { internal } from "./_generated/api";
 
-export const resend: Resend = new Resend(components.resend, {
-  onEmailEvent: internal.example.handleEmailEvent,
+app.use(resend, {
+  args: { onEmailEvent: internal.sendEmails.handleEmailEvent },
+  env: { RESEND_API_KEY: app.env.RESEND_API_KEY },
 });
+```
+
+And define it in `sendEmails.ts`:
+
+```ts
+import { internalMutation } from "./_generated/server";
+import { vOnEmailEventArgs } from "@convex-dev/resend";
 
 export const handleEmailEvent = internalMutation({
   args: vOnEmailEventArgs,
@@ -151,14 +158,16 @@ Check out the `example/` project in this repo for a full demo.
 
 ### Resend component options, and going into production
 
-There is a `ResendOptions` argument to the component constructor to help
-customize it's behavior.
+The component takes its config as `args` in `convex/convex.config.ts`, applied
+on every push:
 
-Check out the [docstrings](./src/client/index.ts), but notable options include:
+```ts
+app.use(resend, {
+  args: { testMode: false },
+  env: { RESEND_API_KEY: app.env.RESEND_API_KEY },
+});
+```
 
-- `apiKey`: Provide the Resend API key instead of having it read from the
-  environment variable.
-- `webhookSecret`: Same thing, but for the webhook secret.
 - `testMode`: Only allow delivery to test addresses. To keep you safe as you
   develop your project, `testMode` is default **true**. You need to explicitly
   set this to `false` for the component to allow you to enqueue emails to
@@ -166,6 +175,12 @@ Check out the [docstrings](./src/client/index.ts), but notable options include:
 - `onEmailEvent`: Your email event callback, as outlined above! Check out the
   [docstrings](./src/client/index.ts) for details on the events that are
   emitted.
+- `retryAttempts`: How many times to try sending a batch. Default: 5.
+- `initialBackoffMs`: The backoff before the first retry. Default: 30 seconds.
+
+The API key comes from the component's `RESEND_API_KEY` env var. The `Resend`
+client takes one option, `webhookSecret`, which defaults to the
+`RESEND_WEBHOOK_SECRET` environment variable.
 
 ### Optional email sending parameters
 
@@ -350,9 +365,8 @@ import { Button, Html } from "@react-email/components";
 import { components } from "./_generated/api";
 import { Resend } from "@convex-dev/resend";
 
-export const resend: Resend = new Resend(components.resend, {
-  testMode: false,
-});
+// Pass `args: { testMode: false }` in convex.config.ts to send to real addresses.
+export const resend: Resend = new Resend(components.resend);
 
 export const sendEmail = action({
   args: {},
