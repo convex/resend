@@ -10,11 +10,6 @@ import { type Infer, v, type VString } from "convex/values";
 export type EmailId = string & { __isEmailId: true };
 export const vEmailId = v.string() as VString<EmailId>;
 
-// Validator for the onEmailEvent option.
-export const onEmailEvent = v.object({
-  fnHandle: v.string(),
-});
-
 // Validator for the status of an email.
 export const vStatus = v.union(
   v.literal("waiting"),
@@ -34,17 +29,6 @@ export const vTemplate = v.object({
   variables: v.optional(v.record(v.string(), v.union(v.string(), v.number()))),
 });
 export type Template = Infer<typeof vTemplate>;
-
-// Validator for the runtime options used by the component.
-export const vOptions = v.object({
-  initialBackoffMs: v.number(),
-  retryAttempts: v.number(),
-  apiKey: v.string(),
-  testMode: v.boolean(),
-  onEmailEvent: v.optional(onEmailEvent),
-});
-
-export type RuntimeConfig = Infer<typeof vOptions>;
 
 const commonFields = {
   broadcast_id: v.optional(v.string()),
@@ -166,8 +150,7 @@ export type EmailEvent = Infer<typeof vEmailEvent>;
 
 /**
  * The arguments a parent passes in `app.use(resend, { args })`, stored verbatim
- * on the `config` document. Each one wins over the matching per-call option
- * from the `Resend` client, so installs that pass no args behave as before.
+ * as the `config` document. Defaults are applied when reading it.
  */
 export const vInitArgs = v.object({
   testMode: v.optional(v.boolean()),

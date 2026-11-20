@@ -4,13 +4,22 @@ import { defineTestApp } from "convex-test";
 import { Resend, vOnEmailEventArgs, type EmailEvent } from "./index.js";
 import resendTest from "../test.js";
 
+function registerWithCallback(
+  t: Parameters<typeof resendTest.register>[0],
+  name: string,
+) {
+  return resendTest.register(t, name, {
+    onEmailEvent: internal.callbacks.onEmailEvent,
+  });
+}
+
 const app = defineTestApp({
   schema: defineSchema({
     events: defineTable(vOnEmailEventArgs),
   }),
   components: {
-    resend: resendTest,
-    customResend: resendTest,
+    resend: { register: registerWithCallback },
+    customResend: { register: registerWithCallback },
   },
 });
 const { createTest, internal } = app.defineModules({
@@ -27,11 +36,13 @@ const { createTest, internal } = app.defineModules({
 describe("Resend test registration", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubEnv("RESEND_API_KEY", "test-api-key");
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   test.each(["resend", "customResend"] as const)(
@@ -47,10 +58,7 @@ describe("Resend test registration", () => {
 
       const t = createTest();
       const component = app.components[name];
-      const resend = new Resend(component, {
-        apiKey: "test-api-key",
-        onEmailEvent: internal.callbacks.onEmailEvent,
-      });
+      const resend = new Resend(component);
       const emailId = await t.run((ctx) =>
         resend.sendEmail(ctx, {
           from: "sender@example.com",
