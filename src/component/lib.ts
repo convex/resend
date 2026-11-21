@@ -203,6 +203,10 @@ export const sendEmail = mutation({
       textContentId = contentId;
     }
 
+    // Bind the options to this email, so other callers of this component
+    // can't change the API key, retries, or callback it is handled with.
+    const optionsId = await getOrCreateEmailOptions(ctx, args.options);
+
     // This is the "send requested" segment.
     const segment = getSegment(Date.now());
 
@@ -218,6 +222,7 @@ export const sendEmail = mutation({
       template: args.template,
       headers: args.headers,
       idempotencyKey: args.idempotencyKey,
+      optionsId,
       segment,
       status: "waiting",
       bounced: false,
@@ -369,7 +374,11 @@ export const get = query({
   },
   returns: v.union(
     v.object({
-      ...omit(schema.tables.emails.validator.fields, ["html", "text"]),
+      ...omit(schema.tables.emails.validator.fields, [
+        "html",
+        "text",
+        "optionsId",
+      ]),
       createdAt: v.number(),
       html: v.optional(v.string()),
       text: v.optional(v.string()),
@@ -393,7 +402,7 @@ export const get = query({
         )
       : undefined;
     return {
-      ...omit(email, ["html", "text", "_id", "_creationTime"]),
+      ...omit(email, ["html", "text", "optionsId", "_id", "_creationTime"]),
       createdAt: email._creationTime,
       html,
       text,
@@ -401,6 +410,39 @@ export const get = query({
     };
   },
 });
+
+// Find or create the emailOptions row for these options.
+async function getOrCreateEmailOptions(
+  ctx: MutationCtx,
+  options: RuntimeConfig,
+): Promise<Id<"emailOptions">> {
+  const candidates = ctx.db
+    .query("emailOptions")
+    .withIndex("by_apiKey", (q) => q.eq("options.apiKey", options.apiKey));
+  for await (const candidate of candidates) {
+    if (isDeepEqual(candidate.options, options)) {
+      return candidate._id;
+    }
+  }
+  return await ctx.db.insert("emailOptions", { options });
+}
+
+// Get the options an email was sent with. Emails without their own options
+// (enqueued before options were stored per email, or created by
+// sendEmailManually) use the last options any caller sent with.
+async function getEmailOptions(
+  ctx: MutationCtx,
+  optionsId: Id<"emailOptions"> | undefined,
+): Promise<RuntimeConfig | null> {
+  if (optionsId !== undefined) {
+    const emailOptions = await ctx.db.get("emailOptions", optionsId);
+    if (emailOptions) {
+      return emailOptions.options;
+    }
+  }
+  const lastOptions = await ctx.db.query("lastOptions").unique();
+  return lastOptions?.options ?? null;
+}
 
 // Ensure there is a worker running to grab batches of emails.
 async function scheduleBatchRun(ctx: MutationCtx, options: RuntimeConfig) {
@@ -442,13 +484,6 @@ export const makeBatch = internalMutation({
   args: { reloop: v.boolean(), segment: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    // Get the API key for the worker.
-    const lastOptions = await ctx.db.query("lastOptions").unique();
-    if (!lastOptions) {
-      throw new Error("No last options found -- invariant");
-    }
-    const options = lastOptions.options;
-
     // Grab the batch of emails to send.
     const emails = await ctx.db
       .query("emails")
@@ -473,29 +508,45 @@ export const makeBatch = internalMutation({
       });
     }
 
-    // Okay, let's calculate rate limiting as best we can globally in this distributed system.
-    const delay = await getDelay(ctx);
+    // Split the batch by the options each email was sent with.
+    const groups = new Map<Id<"emailOptions"> | undefined, Id<"emails">[]>();
+    for (const email of emails) {
+      const group = groups.get(email.optionsId) ?? [];
+      group.push(email._id);
+      groups.set(email.optionsId, group);
+    }
 
-    // Give the batch to the workpool! It will call the Resend batch API
-    // in a durable background action.
-    await emailPool.enqueueAction(
-      ctx,
-      internal.lib.callResendAPIWithBatch,
-      {
-        apiKey: options.apiKey,
-        emails: emails.map((e) => e._id),
-      },
-      {
-        retry: {
-          maxAttempts: options.retryAttempts,
-          initialBackoffMs: options.initialBackoffMs,
-          base: 2,
+    for (const [optionsId, emailIds] of groups) {
+      // Get the API key and retry settings for this group.
+      const options = await getEmailOptions(ctx, optionsId);
+      if (!options) {
+        throw new Error("No last options found -- invariant");
+      }
+
+      // Okay, let's calculate rate limiting as best we can globally in this distributed system.
+      const delay = await getDelay(ctx);
+
+      // Give the batch to the workpool! It will call the Resend batch API
+      // in a durable background action.
+      await emailPool.enqueueAction(
+        ctx,
+        internal.lib.callResendAPIWithBatch,
+        {
+          apiKey: options.apiKey,
+          emails: emailIds,
         },
-        runAfter: delay,
-        context: { emailIds: emails.map((e) => e._id) },
-        onComplete: internal.lib.onEmailComplete,
-      },
-    );
+        {
+          retry: {
+            maxAttempts: options.retryAttempts,
+            initialBackoffMs: options.initialBackoffMs,
+            base: 2,
+          },
+          runAfter: delay,
+          context: { emailIds },
+          onComplete: internal.lib.onEmailComplete,
+        },
+      );
+    }
 
     // Let's go around again until there are no more batches to make in this particular segment range.
     await ctx.scheduler.runAfter(0, internal.lib.makeBatch, {
@@ -989,13 +1040,13 @@ async function enqueueCallbackIfExists(
   email: Doc<"emails">,
   event: EmailEvent,
 ) {
-  const lastOptions = await ctx.db.query("lastOptions").unique();
-  // lastOptions may not exist if the user only uses sendEmailManually
-  if (!lastOptions) {
+  const options = await getEmailOptions(ctx, email.optionsId);
+  // options may not exist if the user only uses sendEmailManually
+  if (!options) {
     return;
   }
-  if (lastOptions.options.onEmailEvent) {
-    const handle = lastOptions.options.onEmailEvent.fnHandle as FunctionHandle<
+  if (options.onEmailEvent) {
+    const handle = options.onEmailEvent.fnHandle as FunctionHandle<
       "mutation",
       {
         id: Id<"emails">;

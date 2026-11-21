@@ -1,9 +1,13 @@
-import { expect, describe, it, beforeEach } from "vitest";
-import { api } from "./_generated/api.js";
-import { vEmailEvent, type EmailEvent } from "./shared.js";
+import { expect, describe, it, beforeEach, afterEach, vi } from "vitest";
+import rateLimiter from "@convex-dev/rate-limiter/test";
+import workpool from "@convex-dev/workpool/test";
+import { api, internal } from "./_generated/api.js";
+import { vEmailEvent, type EmailEvent, type RuntimeConfig } from "./shared.js";
 import { attemptToParse } from "./utils.js";
 import {
   createTestEventOfType,
+  createTestRuntimeConfig,
+  insertTestEmail,
   insertTestSentEmail,
   setupTest,
   setupTestLastOptions,
@@ -492,5 +496,185 @@ describe("createManualEmail", () => {
     expect(email.to).toEqual(["delivered@resend.dev"]);
     expect(email.cc).toEqual(["cc@resend.dev"]);
     expect(email.bcc).toEqual(["bcc@resend.dev"]);
+  });
+});
+
+describe("per-email options", () => {
+  let t: Tester;
+
+  const appOptions: RuntimeConfig = {
+    apiKey: "re_app",
+    testMode: false,
+    initialBackoffMs: 1000,
+    retryAttempts: 3,
+    onEmailEvent: { fnHandle: "function://app-callback" },
+  };
+  const authOptions: RuntimeConfig = {
+    apiKey: "re_auth",
+    testMode: false,
+    initialBackoffMs: 30000,
+    retryAttempts: 5,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    t = setupTest();
+    rateLimiter.register(t);
+    workpool.register(t, "emailWorkpool");
+    workpool.register(t, "callbackWorkpool");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const send = (options: RuntimeConfig, to: string) =>
+    t.mutation(api.lib.sendEmail, {
+      options,
+      from: "test@example.com",
+      to: [to],
+      subject: "Test",
+      html: "<p>Test</p>",
+    });
+
+  const getEmail = (emailId: Id<"emails">) =>
+    t.run(async (ctx) => {
+      const email = await ctx.db.get("emails", emailId);
+      if (!email) throw new Error("Email not found");
+      return email;
+    });
+
+  // Mock the Resend batch API, returning ids like "<apiKey>-<index>".
+  const mockFetch = () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (_input, init) => {
+        const headers = init?.headers as Record<string, string>;
+        const apiKey = headers.Authorization.replace("Bearer ", "");
+        const body = JSON.parse(init?.body as string) as unknown[];
+        return new Response(
+          JSON.stringify({
+            data: body.map((_, i) => ({ id: `${apiKey}-${i}` })),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  };
+
+  // The recipients sent with each API key.
+  const sentByApiKey = (fetchMock: ReturnType<typeof mockFetch>) =>
+    fetchMock.mock.calls.map(([, init]) => ({
+      apiKey: (init?.headers as Record<string, string>).Authorization,
+      to: (JSON.parse(init?.body as string) as { to: string[] }[]).map(
+        (e) => e.to,
+      ),
+    }));
+
+  it("stores options per email and reuses identical options", async () => {
+    const first = await getEmail(await send(appOptions, "a@example.com"));
+    const second = await getEmail(await send(authOptions, "b@example.com"));
+    const third = await getEmail(await send(appOptions, "c@example.com"));
+
+    expect(first.optionsId).toBeDefined();
+    expect(second.optionsId).toBeDefined();
+    expect(second.optionsId).not.toBe(first.optionsId);
+    expect(third.optionsId).toBe(first.optionsId);
+
+    const rows = await t.run((ctx) => ctx.db.query("emailOptions").collect());
+    expect(rows.map((r) => r.options)).toEqual([appOptions, authOptions]);
+
+    // lastOptions is still maintained for emails without their own options.
+    const lastOptions = await t.run((ctx) =>
+      ctx.db.query("lastOptions").unique(),
+    );
+    expect(lastOptions?.options).toEqual(appOptions);
+  });
+
+  it("sends each group of a mixed batch with its own api key", async () => {
+    const fetchMock = mockFetch();
+    const a = await send(appOptions, "a@example.com");
+    const b = await send(authOptions, "b@example.com");
+    const c = await send(appOptions, "c@example.com");
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(sentByApiKey(fetchMock)).toEqual(
+      expect.arrayContaining([
+        { apiKey: "Bearer re_app", to: [["a@example.com"], ["c@example.com"]] },
+        { apiKey: "Bearer re_auth", to: [["b@example.com"]] },
+      ]),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await getEmail(a)).toMatchObject({
+      status: "sent",
+      resendId: "re_app-0",
+    });
+    expect(await getEmail(b)).toMatchObject({
+      status: "sent",
+      resendId: "re_auth-0",
+    });
+    expect(await getEmail(c)).toMatchObject({
+      status: "sent",
+      resendId: "re_app-1",
+    });
+  });
+
+  it("falls back to lastOptions for emails without their own options", async () => {
+    const fetchMock = mockFetch();
+    await setupTestLastOptions(t, {
+      options: { ...createTestRuntimeConfig(), apiKey: "re_last" },
+    });
+    const waiting = {
+      from: "test@example.com",
+      subject: "Test",
+      replyTo: [],
+      status: "waiting" as const,
+      bounced: false,
+      complained: false,
+      failed: false,
+      deliveryDelayed: false,
+      opened: false,
+      clicked: false,
+      segment: 0,
+      finalizedAt: Number.MAX_SAFE_INTEGER,
+    };
+    // Enqueued before options were stored per email.
+    const legacy = await insertTestEmail(t, {
+      ...waiting,
+      to: ["legacy@example.com"],
+    });
+    // Points at an options row that no longer exists.
+    const missingOptionsId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("emailOptions", { options: appOptions });
+      await ctx.db.delete("emailOptions", id);
+      return id;
+    });
+    const missing = await insertTestEmail(t, {
+      ...waiting,
+      to: ["missing@example.com"],
+      optionsId: missingOptionsId,
+    });
+    await t.run(async (ctx) => {
+      const runId = await ctx.scheduler.runAfter(0, internal.lib.makeBatch, {
+        reloop: false,
+        segment: 10,
+      });
+      await ctx.db.insert("nextBatchRun", { runId });
+    });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(sentByApiKey(fetchMock)).toEqual(
+      expect.arrayContaining([
+        { apiKey: "Bearer re_last", to: [["legacy@example.com"]] },
+        { apiKey: "Bearer re_last", to: [["missing@example.com"]] },
+      ]),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await getEmail(legacy._id)).status).toBe("sent");
+    expect((await getEmail(missing._id)).status).toBe("sent");
   });
 });
