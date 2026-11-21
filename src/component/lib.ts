@@ -40,11 +40,16 @@ const FINALIZED_EPOCH = Number.MAX_SAFE_INTEGER;
 const ABANDONED_EMAIL_RETENTION_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 const RESEND_TEST_EMAILS = ["delivered", "bounced", "complained"];
+// Resend doesn't support +labels on these yet.
+const RESEND_UNLABELED_TEST_EMAILS = ["suppressed"];
 
 function isTestEmail(email: string) {
   const [prefix, domain] = email.split("@");
   if (domain !== "resend.dev") {
     return false;
+  }
+  if (RESEND_UNLABELED_TEST_EMAILS.includes(prefix)) {
+    return true;
   }
   for (const testEmail of RESEND_TEST_EMAILS) {
     if (prefix === testEmail) {
@@ -821,6 +826,7 @@ function computeEmailUpdateFromEvent(
     delivered: 4,
     bounced: 5,
     failed: 5,
+    suppressed: 5,
     cancelled: 100, // treat cancelled as terminal
   };
 
@@ -884,6 +890,16 @@ function computeEmailUpdateFromEvent(
       updated.finalizedAt = Date.now();
     }
     return updated;
+  }
+
+  if (event.type == "email.suppressed") {
+    if (!canUpgradeTo("suppressed")) return null;
+    return {
+      ...email,
+      status: "suppressed",
+      errorMessage: event.data.suppressed?.message,
+      finalizedAt: Date.now(),
+    };
   }
 
   if (event.type == "email.delivery_delayed") {
@@ -969,7 +985,9 @@ export const handleEmailEvent = mutation({
             ? event.data.bounce?.message
             : event.type === "email.failed"
               ? event.data.failed?.reason
-              : undefined,
+              : event.type === "email.suppressed"
+                ? event.data.suppressed?.message
+                : undefined,
       });
     }
 

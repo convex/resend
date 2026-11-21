@@ -22,6 +22,7 @@ export const vStatus = v.union(
   v.literal("delivery_delayed"),
   v.literal("bounced"),
   v.literal("failed"),
+  v.literal("suppressed"),
 );
 export type Status = Infer<typeof vStatus>;
 
@@ -144,6 +145,20 @@ export const vEmailEvent = v.union(
       }),
     }),
   }),
+  // `suppressed` is only shown in Resend's example payload, so don't require it.
+  v.object({
+    type: v.literal("email.suppressed"),
+    created_at: v.string(),
+    data: v.object({
+      ...commonFields,
+      suppressed: v.optional(
+        v.object({
+          message: v.string(),
+          type: v.string(),
+        }),
+      ),
+    }),
+  }),
 );
 
 export const ACCEPTED_EVENT_TYPES = [
@@ -155,6 +170,7 @@ export const ACCEPTED_EVENT_TYPES = [
   "email.delivery_delayed",
   "email.opened",
   "email.clicked",
+  "email.suppressed",
 ] as const;
 
 export const vEventType = v.union(literals(...ACCEPTED_EVENT_TYPES));

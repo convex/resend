@@ -8,6 +8,7 @@ export default defineSchema({
       v.literal("delivered"),
       v.literal("bounced"),
       v.literal("complained"),
+      v.literal("suppressed"),
     ),
   }).index("by_email", ["email"]),
 });

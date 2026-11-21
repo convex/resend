@@ -24,6 +24,7 @@ export const testBatch = internalAction({
       "delivered@resend.dev",
       "bounced@resend.dev",
       "complained@resend.dev",
+      "suppressed@resend.dev",
     ];
 
     for (let i = 0; i < 25; i++) {
@@ -37,7 +38,8 @@ export const testBatch = internalAction({
       });
       await ctx.runMutation(internal.example.insertExpectation, {
         email: email,
-        expectation: expectation as "delivered" | "bounced" | "complained",
+        expectation: expectation as
+          "delivered" | "bounced" | "complained" | "suppressed",
       });
     }
     while (!(await ctx.runQuery(internal.example.isEmpty))) {
@@ -127,6 +129,7 @@ export const insertExpectation = internalMutation({
       v.literal("delivered"),
       v.literal("bounced"),
       v.literal("complained"),
+      v.literal("suppressed"),
     ),
   },
   returns: v.null(),
@@ -178,6 +181,15 @@ export const handleEmailEvent = internalMutation({
         );
       }
       // All good. Bounced email was bounced.
+      await ctx.db.delete("testEmails", testEmail._id);
+    }
+    if (args.event.type === "email.suppressed") {
+      if (testEmail.expectation !== "suppressed") {
+        throw new Error(
+          `Email was suppressed but expected to be ${testEmail.expectation}`,
+        );
+      }
+      // All good. Suppressed email was suppressed.
       await ctx.db.delete("testEmails", testEmail._id);
     }
     if (args.event.type === "email.complained") {

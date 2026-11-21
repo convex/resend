@@ -148,6 +148,19 @@ export const createTestEventOfType = <T extends EventEventTypes>(
       },
     });
 
+  if (type === "email.suppressed")
+    return applyOverrides({
+      ...baseEvent,
+      type: "email.suppressed",
+      data: {
+        ...baseData,
+        suppressed: {
+          message: "The recipient's email address is on the suppression list",
+          type: "Suppressed",
+        },
+      },
+    });
+
   return assertExhaustive(type);
 };
 
