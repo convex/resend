@@ -57,6 +57,7 @@ export default defineSchema({
       ),
     ),
     batchSize: v.optional(v.number()),
+    batchReferenceToken: v.optional(v.string()),
     submissionUnconfirmed: v.optional(v.literal(true)),
     idempotencyKey: v.optional(v.string()),
     segment: v.number(),

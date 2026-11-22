@@ -40,10 +40,18 @@ describe("batch submission", () => {
     const firstBody = send.mock.calls[0][1]?.body;
     if (typeof firstBody !== "string")
       throw new Error("Expected the batch body");
-    expect(JSON.parse(firstBody)).toMatchObject([
-      { tags: [{ name: "convex_email_id", value: a._id }] },
-      { tags: [{ name: "convex_email_id", value: b._id }] },
-    ]);
+    const [first, second] = JSON.parse(firstBody);
+    const aReference: string = first.tags[0].value;
+    const bReference: string = second.tags[0].value;
+    expect(aReference.startsWith(a._id + "_")).toBe(true);
+    expect(bReference.startsWith(b._id + "_")).toBe(true);
+
+    send.mockResolvedValueOnce(
+      Response.json({ data: [{ id: "provider-a" }, { id: "provider-a" }] }),
+    );
+    await expect(
+      t.action(internal.lib.callResendAPIWithBatch, request),
+    ).rejects.toThrow("duplicate message IDs");
 
     const bounce = createTestEventOfType("email.bounced");
     await t.mutation(api.lib.handleEmailEvent, {
@@ -52,7 +60,7 @@ describe("batch submission", () => {
         data: {
           ...bounce.data,
           email_id: "provider-a",
-          tags: { convex_email_id: a._id },
+          tags: { convex_email_id: aReference },
         },
       },
     });
@@ -62,9 +70,9 @@ describe("batch submission", () => {
     await expect(
       t.action(internal.lib.callResendAPIWithBatch, request),
     ).rejects.toThrow("Resend API error: Forbidden");
-    expect(send.mock.calls).toHaveLength(3);
-    expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
-    expect(send.mock.calls[2]).toEqual(send.mock.calls[0]);
+    expect(send.mock.calls).toHaveLength(4);
+    for (const call of send.mock.calls)
+      expect(call).toEqual(send.mock.calls[0]);
 
     await t.mutation(internal.lib.onEmailComplete, {
       workId: "test-work" as WorkId,
@@ -96,7 +104,7 @@ describe("batch submission", () => {
         data: {
           ...delivered.data,
           email_id: "provider-b",
-          tags: { convex_email_id: b._id },
+          tags: { convex_email_id: bReference },
         },
       },
     });
@@ -109,6 +117,47 @@ describe("batch submission", () => {
     expect(await t.query(api.lib.get, { emailId: b._id })).not.toHaveProperty(
       "batchSubmission",
     );
+  });
+
+  it("preserves manual delivery events with an app-owned reference tag", async () => {
+    const t = setupTest();
+    const original = await t.mutation(api.lib.createManualEmail, {
+      from: "from@example.com",
+      to: "to@example.com",
+      subject: "Manual email",
+    });
+    const providerId = "provider-manual";
+    await t.mutation(api.lib.updateManualEmail, {
+      emailId: original,
+      status: "sent",
+      resendId: providerId,
+    });
+    const delivered = createTestEventOfType("email.delivered");
+    await t.mutation(api.lib.handleEmailEvent, {
+      event: {
+        ...delivered,
+        data: {
+          ...delivered.data,
+          email_id: providerId,
+          tags: { convex_email_id: "app_value" },
+        },
+      },
+    });
+    expect(
+      await t.query(api.lib.getStatus, { emailId: original }),
+    ).toMatchObject({ status: "delivered" });
+    const manualId = await t.mutation(api.lib.createManualEmail, {
+      from: "from@example.com",
+      to: "to@example.com",
+      subject: "Manual email",
+    });
+    await expect(
+      t.mutation(api.lib.updateManualEmail, {
+        emailId: manualId,
+        status: "sent",
+        resendId: providerId,
+      }),
+    ).rejects.toThrow("already assigned");
   });
 
   it("submits surviving emails when a cancelled row was cleaned before the first attempt", async () => {

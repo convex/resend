@@ -44,6 +44,7 @@ const EMAIL_REFERENCE_TAG = "convex_email_id";
 const INTERNAL_SUBMISSION_FIELDS = [
   "batchSubmission",
   "batchSize",
+  "batchReferenceToken",
   "submissionUnconfirmed",
 ] as const;
 
@@ -298,6 +299,17 @@ export const updateManualEmail = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (args.resendId) {
+      const bound = await ctx.db
+        .query("emails")
+        .withIndex("by_resendId", (q) => q.eq("resendId", args.resendId))
+        .first();
+      if (bound && bound._id !== args.emailId) {
+        throw new Error(
+          "Resend message ID is already assigned to another email",
+        );
+      }
+    }
     const finalizedAt =
       args.status === "failed" || args.status === "cancelled"
         ? Date.now()
@@ -587,7 +599,7 @@ export const callResendAPIWithBatch = internalAction({
     // Construct the JSON payload for the Resend API from all the database values.
     const { emailIds, firstAttempt } = await ctx.runMutation(
       internal.lib.beginBatchSubmission,
-      { emailIds: args.emails },
+      { emailIds: args.emails, referenceToken: crypto.randomUUID() },
     );
     if (emailIds.length === 0) {
       // No emails to send.
@@ -638,21 +650,22 @@ export const callResendAPIWithBatch = internalAction({
       ) {
         throw new Error("Resend did not acknowledge every email in the batch");
       }
-      return {
-        emailIds,
-        resendIds: data.data.map((d: { id: string }) => d.id),
-      };
+      const resendIds = data.data.map((d: { id: string }) => d.id);
+      if (new Set(resendIds).size !== resendIds.length) {
+        throw new Error("Resend returned duplicate message IDs in the batch");
+      }
+      return { emailIds, resendIds };
     }
   },
 });
 
 export const beginBatchSubmission = internalMutation({
-  args: { emailIds: v.array(v.id("emails")) },
+  args: { emailIds: v.array(v.id("emails")), referenceToken: v.string() },
   returns: v.object({
     emailIds: v.array(v.id("emails")),
     firstAttempt: v.boolean(),
   }),
-  handler: async (ctx, { emailIds }) => {
+  handler: async (ctx, { emailIds, referenceToken }) => {
     const rows = await Promise.all(
       emailIds.map((id) => ctx.db.get("emails", id)),
     );
@@ -692,6 +705,8 @@ export const beginBatchSubmission = internalMutation({
           batchSubmission:
             email.batchSubmission === "pending" ? "started" : "legacy_started",
           batchSize: emails.length,
+          batchReferenceToken:
+            email.batchSubmission === "pending" ? referenceToken : undefined,
         });
       }
     }
@@ -725,6 +740,7 @@ async function markEmailsFailedHandler(
         status: "failed",
         batchSubmission: undefined,
         batchSize: undefined,
+        batchReferenceToken: undefined,
         errorMessage: args.errorMessage,
         finalizedAt: Date.now(),
       });
@@ -828,10 +844,14 @@ async function createResendBatchPayload(
   const batchPayload = emails.map((email: Doc<"emails">) => {
     const payload: Record<string, unknown> = {
       from: email.from,
-      tags:
-        email.batchSubmission === "started"
-          ? [{ name: EMAIL_REFERENCE_TAG, value: email._id }]
-          : undefined,
+      tags: email.batchReferenceToken
+        ? [
+            {
+              name: EMAIL_REFERENCE_TAG,
+              value: `${email._id}_${email.batchReferenceToken}`,
+            },
+          ]
+        : undefined,
       to: Array.isArray(email.to) ? email.to : [email.to],
       bcc: email.bcc,
       cc: email.cc,
@@ -1073,15 +1093,27 @@ export const handleEmailEvent = mutation({
       .withIndex("by_resendId", (q) => q.eq("resendId", event.data.email_id))
       .unique();
 
-    if (email && reference && reference !== email._id) {
+    const separator = reference?.indexOf("_") ?? -1;
+    const referencedId =
+      reference && separator > 0
+        ? ctx.db.normalizeId("emails", reference.slice(0, separator))
+        : null;
+    const candidate = referencedId
+      ? await ctx.db.get("emails", referencedId)
+      : null;
+    const submitted =
+      candidate?.batchReferenceToken &&
+      reference === `${candidate._id}_${candidate.batchReferenceToken}`
+        ? candidate
+        : null;
+
+    if (email && submitted && submitted._id !== email._id) {
       console.warn("Conflicting Resend email reference", {
         resendId: event.data.email_id,
       });
       return;
     }
     if (!email) {
-      const id = reference && ctx.db.normalizeId("emails", reference);
-      const submitted = id ? await ctx.db.get("emails", id) : null;
       if (
         submitted &&
         (submitted.status === "queued" || submitted.submissionUnconfirmed) &&
