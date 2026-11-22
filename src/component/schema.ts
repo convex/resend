@@ -56,6 +56,8 @@ export default defineSchema({
         v.literal("legacy_started"),
       ),
     ),
+    batchSize: v.optional(v.number()),
+    submissionUnconfirmed: v.optional(v.literal(true)),
     idempotencyKey: v.optional(v.string()),
     segment: v.number(),
     finalizedAt: v.number(),

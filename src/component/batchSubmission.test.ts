@@ -36,7 +36,7 @@ describe("batch submission", () => {
     ).rejects.toThrow("Lost acknowledgement");
     await expect(
       t.action(internal.lib.callResendAPIWithBatch, request),
-    ).rejects.toThrow("HTTP 403");
+    ).rejects.toThrow("Resend API error: Forbidden");
     const firstBody = send.mock.calls[0][1]?.body;
     if (typeof firstBody !== "string")
       throw new Error("Expected the batch body");
@@ -61,7 +61,7 @@ describe("batch submission", () => {
     ).rejects.toThrow("already been sent");
     await expect(
       t.action(internal.lib.callResendAPIWithBatch, request),
-    ).rejects.toThrow("HTTP 403");
+    ).rejects.toThrow("Resend API error: Forbidden");
     expect(send.mock.calls).toHaveLength(3);
     expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
     expect(send.mock.calls[2]).toEqual(send.mock.calls[0]);
@@ -72,8 +72,23 @@ describe("batch submission", () => {
       result: { kind: "failed", error: "No acknowledgement after retries" },
     });
     expect(await t.query(api.lib.getStatus, { emailId: b._id })).toMatchObject({
-      status: "queued",
+      status: "failed",
+      errorMessage: "Resend submission was not confirmed",
     });
+    await t.mutation(internal.lib.onEmailComplete, {
+      workId: "test-work" as WorkId,
+      context: { emailIds: request.emails },
+      result: {
+        kind: "success",
+        returnValue: {
+          emailIds: request.emails,
+          resendIds: ["provider-a", "provider-a"],
+        },
+      },
+    });
+    expect(await t.query(api.lib.get, { emailId: b._id })).not.toHaveProperty(
+      "resendId",
+    );
     const delivered = createTestEventOfType("email.delivered");
     await t.mutation(api.lib.handleEmailEvent, {
       event: {
@@ -91,6 +106,38 @@ describe("batch submission", () => {
     expect(await t.query(api.lib.getStatus, { emailId: b._id })).toMatchObject({
       status: "delivered",
     });
+    expect(await t.query(api.lib.get, { emailId: b._id })).not.toHaveProperty(
+      "batchSubmission",
+    );
+  });
+
+  it("submits surviving emails when a cancelled row was cleaned before the first attempt", async () => {
+    const t = setupTest();
+    const cancelled = await insertTestSentEmail(t);
+    const remaining = await insertTestSentEmail(t);
+    await t.run(async (ctx) => {
+      await ctx.db.delete("emails", cancelled._id);
+      await ctx.db.patch("emails", remaining._id, {
+        status: "queued",
+        resendId: undefined,
+        batchSubmission: "pending",
+      });
+    });
+    const send = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        Response.json({ data: [{ id: "provider-remaining" }] }),
+      );
+    await expect(
+      t.action(internal.lib.callResendAPIWithBatch, {
+        apiKey: "re_fictional",
+        emails: [cancelled._id, remaining._id],
+      }),
+    ).resolves.toEqual({
+      emailIds: [remaining._id],
+      resendIds: ["provider-remaining"],
+    });
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("marks a new batch rejected on its known first attempt", async () => {
@@ -132,7 +179,7 @@ describe("batch submission", () => {
         apiKey: "re_fictional",
         emails: [email._id],
       }),
-    ).rejects.toThrow("HTTP 403");
+    ).rejects.toThrow("Resend API error: Forbidden");
     const body = send.mock.calls[0][1]?.body;
     if (typeof body !== "string") throw new Error("Expected the batch body");
     expect(JSON.parse(body)[0]).not.toHaveProperty("tags");
