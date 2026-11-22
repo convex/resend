@@ -62,7 +62,7 @@ describe("batch submission", () => {
         data: {
           ...bounce.data,
           email_id: "provider-a",
-          tags: { convex_email_id: aReference },
+          tags: { convex_batch_reference: aReference },
           cc: [],
           bcc: [],
         },
@@ -108,7 +108,7 @@ describe("batch submission", () => {
         data: {
           ...delivered.data,
           email_id: "provider-b",
-          tags: { convex_email_id: bReference },
+          tags: { convex_batch_reference: bReference },
           cc: [],
           bcc: [],
         },
@@ -259,6 +259,21 @@ describe("batch submission", () => {
         resendId: providerId,
       }),
     ).rejects.toThrow("already assigned");
+  });
+
+  it("records a webhook against the original manual row when old retries duplicated the provider ID", async () => {
+    const t = setupTest();
+    const original = await insertTestSentEmail(t, { segment: Infinity });
+    const duplicate = await insertTestSentEmail(t, { segment: Infinity });
+    await t.mutation(api.lib.handleEmailEvent, {
+      event: createTestEventOfType("email.delivered"),
+    });
+    expect(
+      await t.query(api.lib.getStatus, { emailId: original._id }),
+    ).toMatchObject({ status: "delivered" });
+    expect(
+      await t.query(api.lib.getStatus, { emailId: duplicate._id }),
+    ).toMatchObject({ status: "sent" });
   });
 
   it("submits surviving emails when a cancelled row was cleaned before the first attempt", async () => {

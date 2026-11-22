@@ -40,7 +40,7 @@ const FINALIZED_EPOCH = Number.MAX_SAFE_INTEGER;
 const ABANDONED_EMAIL_RETENTION_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 const RESEND_TEST_EMAILS = ["delivered", "bounced", "complained"];
-const EMAIL_REFERENCE_TAG = "convex_email_id";
+const EMAIL_REFERENCE_TAG = "convex_batch_reference";
 const INTERNAL_SUBMISSION_FIELDS = [
   "batchSubmission",
   "batchSize",
@@ -977,7 +977,7 @@ export const getEmailByResendId = internalQuery({
     const email = await ctx.db
       .query("emails")
       .withIndex("by_resendId", (q) => q.eq("resendId", args.resendId))
-      .unique();
+      .first();
     if (!email) throw new Error("Email not found for resendId");
     return email;
   },
@@ -1129,7 +1129,8 @@ export const handleEmailEvent = mutation({
     let email = await ctx.db
       .query("emails")
       .withIndex("by_resendId", (q) => q.eq("resendId", event.data.email_id))
-      .unique();
+      // Older manual retries could leave multiple rows for one provider ID.
+      .first();
 
     const separator = reference?.indexOf("_") ?? -1;
     const referencedId =
@@ -1205,7 +1206,7 @@ export const handleEmailEvent = mutation({
     }
 
     // Internal correlation tags are reserved for the component.
-    if (submitted && tags) {
+    if (tags) {
       if (Array.isArray(tags)) {
         event.data.tags = tags.filter(
           ({ name }) => name !== EMAIL_REFERENCE_TAG,
