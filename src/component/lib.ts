@@ -297,14 +297,39 @@ export const updateManualEmail = mutation({
     resendId: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
   },
-  returns: v.null(),
+  returns: v.union(v.id("emails"), v.null()),
   handler: async (ctx, args) => {
+    const email = await ctx.db.get("emails", args.emailId);
     if (args.resendId) {
       const bound = await ctx.db
         .query("emails")
         .withIndex("by_resendId", (q) => q.eq("resendId", args.resendId))
         .first();
-      if (bound && bound._id !== args.emailId) {
+      if (bound?._id === args.emailId) return bound._id;
+      if (bound) {
+        // Existing applications may already pass a stable provider idempotency key
+        // from the manual callback. Return the canonical row for that same send.
+        const sameAddresses = (
+          first?: string | string[],
+          second?: string | string[],
+        ) =>
+          JSON.stringify((toArray(first) ?? []).slice().sort()) ===
+          JSON.stringify((toArray(second) ?? []).slice().sort());
+        if (
+          args.status === "sent" &&
+          email?.segment === Infinity &&
+          email.status === "queued" &&
+          !email.resendId &&
+          bound.segment === Infinity &&
+          email.from === bound.from &&
+          email.subject === bound.subject &&
+          sameAddresses(email.to, bound.to) &&
+          sameAddresses(email.cc, bound.cc) &&
+          sameAddresses(email.bcc, bound.bcc)
+        ) {
+          await cleanupEmail(ctx, email);
+          return bound._id;
+        }
         throw new Error(
           "Resend message ID is already assigned to another email",
         );
@@ -320,6 +345,7 @@ export const updateManualEmail = mutation({
       errorMessage: args.errorMessage,
       ...(finalizedAt ? { finalizedAt } : {}),
     });
+    return null;
   },
 });
 
@@ -1179,7 +1205,7 @@ export const handleEmailEvent = mutation({
     }
 
     // Internal correlation tags are reserved for the component.
-    if (submitted?._id === email._id && tags) {
+    if (submitted && tags) {
       if (Array.isArray(tags)) {
         event.data.tags = tags.filter(
           ({ name }) => name !== EMAIL_REFERENCE_TAG,
@@ -1211,7 +1237,15 @@ function matchesSubmissionEnvelope(email: Doc<"emails">, event: EmailEvent) {
     addresses(event.data.from).join(",") === addresses(email.from).join(",") &&
     eventTo.length > 0 &&
     eventTo.every((recipient) => sentTo.has(recipient)) &&
-    (email.subject === undefined || email.subject === event.data.subject)
+    addresses(event.data.cc ?? []).every((recipient) =>
+      addresses(email.cc ?? []).includes(recipient),
+    ) &&
+    addresses(event.data.bcc ?? []).every((recipient) =>
+      addresses(email.bcc ?? []).includes(recipient),
+    ) &&
+    ((!email.subject && email.template !== undefined) ||
+      email.subject === undefined ||
+      email.subject === event.data.subject)
   );
 }
 

@@ -63,6 +63,8 @@ describe("batch submission", () => {
           ...bounce.data,
           email_id: "provider-a",
           tags: { convex_email_id: aReference },
+          cc: [],
+          bcc: [],
         },
       },
     });
@@ -107,6 +109,8 @@ describe("batch submission", () => {
           ...delivered.data,
           email_id: "provider-b",
           tags: { convex_email_id: bReference },
+          cc: [],
+          bcc: [],
         },
       },
     });
@@ -228,10 +232,25 @@ describe("batch submission", () => {
     expect(
       await t.query(api.lib.getStatus, { emailId: original }),
     ).toMatchObject({ status: "delivered" });
-    const manualId = await t.mutation(api.lib.createManualEmail, {
+    const retryId = await t.mutation(api.lib.createManualEmail, {
       from: "from@example.com",
       to: "to@example.com",
       subject: "Manual email",
+    });
+    expect(
+      await t.mutation(api.lib.updateManualEmail, {
+        emailId: retryId,
+        status: "sent",
+        resendId: providerId,
+      }),
+    ).toBe(original);
+    expect(
+      await t.query(api.lib.getStatus, { emailId: original }),
+    ).toMatchObject({ status: "delivered" });
+    const manualId = await t.mutation(api.lib.createManualEmail, {
+      from: "from@example.com",
+      to: "to@example.com",
+      subject: "Different email",
     });
     await expect(
       t.mutation(api.lib.updateManualEmail, {

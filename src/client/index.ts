@@ -366,11 +366,15 @@ export class Resend {
     )) as EmailId;
     try {
       const resendId = await sendCallback(emailId);
-      await ctx.runMutation(this.component.lib.updateManualEmail, {
-        emailId,
-        status: "sent",
-        resendId,
-      });
+      const canonicalId = await ctx.runMutation(
+        this.component.lib.updateManualEmail,
+        {
+          emailId,
+          status: "sent",
+          resendId,
+        },
+      );
+      return (canonicalId ?? emailId) as EmailId;
     } catch (error) {
       await ctx.runMutation(this.component.lib.updateManualEmail, {
         emailId,
@@ -385,8 +389,6 @@ export class Resend {
       });
       throw error;
     }
-
-    return emailId as EmailId;
   }
 
   /**
