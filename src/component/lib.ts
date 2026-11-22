@@ -759,6 +759,18 @@ export const onEmailComplete = emailPool.defineOnComplete({
         return;
       }
       const { emailIds, resendIds } = result;
+      // A completion produced before an upgrade may bypass action validation.
+      if (
+        emailIds.length !== resendIds.length ||
+        new Set(resendIds).size !== resendIds.length
+      ) {
+        for (const id of emailIds) {
+          const email = await ctx.db.get("emails", id);
+          if (email?.status === "queued" && !email.resendId)
+            await markSubmissionUnconfirmed(ctx, id);
+        }
+        return;
+      }
       for (const [index, emailId] of emailIds.entries()) {
         const email = await ctx.db.get("emails", emailId);
         if (!email) continue;
@@ -1107,7 +1119,11 @@ export const handleEmailEvent = mutation({
         ? candidate
         : null;
 
-    if (email && submitted && submitted._id !== email._id) {
+    if (
+      email?.batchReferenceToken &&
+      submitted &&
+      submitted._id !== email._id
+    ) {
       console.warn("Conflicting Resend email reference", {
         resendId: event.data.email_id,
       });
@@ -1118,7 +1134,8 @@ export const handleEmailEvent = mutation({
         submitted &&
         (submitted.status === "queued" || submitted.submissionUnconfirmed) &&
         submitted.batchSubmission === "started" &&
-        submitted.resendId === undefined
+        submitted.resendId === undefined &&
+        matchesSubmissionEnvelope(submitted, event)
       ) {
         const accepted = {
           status: "sent" as const,
@@ -1161,10 +1178,33 @@ export const handleEmailEvent = mutation({
       await ctx.db.replace("emails", email._id, updated);
     }
 
-    // Keep callback behavior (invoked with current email state and raw event)
+    // Internal correlation tags are reserved for the component.
+    if (submitted?._id === email._id && tags) {
+      if (Array.isArray(tags)) {
+        event.data.tags = tags.filter(
+          ({ name }) => name !== EMAIL_REFERENCE_TAG,
+        );
+      } else {
+        const publicTags = { ...tags };
+        delete publicTags[EMAIL_REFERENCE_TAG];
+        event.data.tags = publicTags;
+      }
+    }
     await enqueueCallbackIfExists(ctx, email, event);
   },
 });
+
+function matchesSubmissionEnvelope(email: Doc<"emails">, event: EmailEvent) {
+  const address = (value: string) =>
+    (value.match(/<([^<>]+)>$/)?.[1] ?? value).trim().toLowerCase();
+  const recipients = (value: string | string[]) =>
+    (Array.isArray(value) ? value : [value]).map(address).sort().join(",");
+  return (
+    recipients(email.from) === recipients(event.data.from) &&
+    recipients(email.to) === recipients(event.data.to) &&
+    (email.subject === undefined || email.subject === event.data.subject)
+  );
+}
 
 async function enqueueCallbackIfExists(
   ctx: MutationCtx,

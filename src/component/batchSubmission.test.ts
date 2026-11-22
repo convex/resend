@@ -119,6 +119,86 @@ describe("batch submission", () => {
     );
   });
 
+  it("does not associate a copied batch reference with a different manual email", async () => {
+    const t = setupTest();
+    const email = await insertTestSentEmail(t, {
+      status: "queued",
+      resendId: undefined,
+      batchSubmission: "pending",
+    });
+    const send = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("No acknowledgement"));
+    await expect(
+      t.action(internal.lib.callResendAPIWithBatch, {
+        apiKey: "re_fictional",
+        emails: [email._id],
+      }),
+    ).rejects.toThrow("No acknowledgement");
+    const payload = send.mock.calls[0][1]?.body;
+    if (typeof payload !== "string")
+      throw new Error("Expected a batch payload");
+    const manual = await t.mutation(api.lib.createManualEmail, {
+      from: "from@example.com",
+      to: "to@example.com",
+      subject: "Manual",
+    });
+    const delivered = createTestEventOfType("email.delivered");
+    const event = {
+      ...delivered,
+      data: {
+        ...delivered.data,
+        email_id: "provider-manual",
+        from: "from@example.com",
+        to: ["to@example.com"],
+        subject: "Manual",
+        tags: JSON.parse(payload)[0].tags,
+      },
+    };
+    await t.mutation(api.lib.handleEmailEvent, { event });
+    expect(
+      await t.query(api.lib.get, { emailId: email._id }),
+    ).not.toHaveProperty("resendId");
+    await t.mutation(api.lib.updateManualEmail, {
+      emailId: manual,
+      status: "sent",
+      resendId: event.data.email_id,
+    });
+    await t.mutation(api.lib.handleEmailEvent, { event });
+    expect(await t.query(api.lib.getStatus, { emailId: manual })).toMatchObject(
+      { status: "delivered" },
+    );
+  });
+
+  it("rejects a pending completion with duplicate IDs without binding either row", async () => {
+    const t = setupTest();
+    const a = await insertTestSentEmail(t, {
+      status: "queued",
+      resendId: undefined,
+    });
+    const b = await insertTestSentEmail(t, {
+      status: "queued",
+      resendId: undefined,
+    });
+    const emailIds = [a._id, b._id];
+    await t.mutation(internal.lib.onEmailComplete, {
+      workId: "old-work" as WorkId,
+      context: { emailIds },
+      result: {
+        kind: "success",
+        returnValue: { emailIds, resendIds: ["duplicate", "duplicate"] },
+      },
+    });
+    for (const emailId of emailIds) {
+      expect(await t.query(api.lib.get, { emailId })).not.toHaveProperty(
+        "resendId",
+      );
+      expect(await t.query(api.lib.getStatus, { emailId })).toMatchObject({
+        status: "failed",
+      });
+    }
+  });
+
   it("preserves manual delivery events with an app-owned reference tag", async () => {
     const t = setupTest();
     const original = await t.mutation(api.lib.createManualEmail, {
