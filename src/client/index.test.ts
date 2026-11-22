@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { defineSchema, defineTable } from "convex/server";
 import { defineTestApp } from "convex-test";
-import { Resend, vOnEmailEventArgs, type EmailEvent } from "./index.js";
+import {
+  ManualEmailRecordingError,
+  Resend,
+  vOnEmailEventArgs,
+  type EmailEvent,
+} from "./index.js";
 import resendTest from "../test.js";
 
 const app = defineTestApp({
@@ -96,4 +101,43 @@ describe("Resend test registration", () => {
       expect(events[0]).toMatchObject({ id: emailId, event });
     },
   );
+});
+
+test("distinguishes a manual send accepted by Resend from a failed tracking write", async () => {
+  const t = createTest();
+  const resend = new Resend(app.components.resend, { apiKey: "test-api-key" });
+  const message = {
+    from: "sender@example.com",
+    to: "recipient@example.com",
+    subject: "First email",
+  };
+  const resendId = "provider-message-id";
+  const recorded = await t.run((ctx) =>
+    resend.sendEmailManually(ctx, message, async () => resendId),
+  );
+  const sendCallback = vi.fn(async () => resendId);
+  await t.run(async (ctx) => {
+    const error = await resend
+      .sendEmailManually(
+        ctx,
+        { ...message, subject: "Different email" },
+        sendCallback,
+      )
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ManualEmailRecordingError);
+    if (!(error instanceof ManualEmailRecordingError))
+      throw new Error("Expected a recording error");
+    expect(error.resendId).toBe(resendId);
+    expect(error.cause).toMatchObject({
+      message: expect.stringContaining("already assigned"),
+    });
+    expect(await resend.get(ctx, error.emailId)).toMatchObject({
+      status: "queued",
+    });
+    expect(await resend.get(ctx, recorded)).toMatchObject({
+      status: "sent",
+      resendId,
+    });
+  });
+  expect(sendCallback).toHaveBeenCalledTimes(1);
 });

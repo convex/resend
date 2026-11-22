@@ -208,6 +208,20 @@ export type SendEmailOptions =
       idempotencyKey?: string;
     };
 
+/** Resend accepted a manual email, but recording that acceptance failed. */
+export class ManualEmailRecordingError extends Error {
+  constructor(
+    readonly emailId: EmailId,
+    readonly resendId: string,
+    readonly cause: unknown,
+  ) {
+    super(
+      "Resend accepted the email, but its acceptance could not be recorded. Reconcile before retrying.",
+    );
+    this.name = "ManualEmailRecordingError";
+  }
+}
+
 export class Resend {
   public config: Config;
   onEmailEvent?: FunctionReference<
@@ -364,17 +378,9 @@ export class Resend {
         headers: options.headers,
       },
     )) as EmailId;
+    let resendId: string;
     try {
-      const resendId = await sendCallback(emailId);
-      const canonicalId = await ctx.runMutation(
-        this.component.lib.updateManualEmail,
-        {
-          emailId,
-          status: "sent",
-          resendId,
-        },
-      );
-      return (canonicalId ?? emailId) as EmailId;
+      resendId = await sendCallback(emailId);
     } catch (error) {
       await ctx.runMutation(this.component.lib.updateManualEmail, {
         emailId,
@@ -388,6 +394,19 @@ export class Resend {
             : undefined,
       });
       throw error;
+    }
+    try {
+      const canonicalId = await ctx.runMutation(
+        this.component.lib.updateManualEmail,
+        {
+          emailId,
+          status: "sent",
+          resendId,
+        },
+      );
+      return (canonicalId ?? emailId) as EmailId;
+    } catch (cause) {
+      throw new ManualEmailRecordingError(emailId, resendId, cause);
     }
   }
 
