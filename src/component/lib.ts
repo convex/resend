@@ -40,6 +40,7 @@ const FINALIZED_EPOCH = Number.MAX_SAFE_INTEGER;
 const ABANDONED_EMAIL_RETENTION_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 const RESEND_TEST_EMAILS = ["delivered", "bounced", "complained"];
+const EMAIL_REFERENCE_TAG = "convex_email_id";
 
 function isTestEmail(email: string) {
   const [prefix, domain] = email.split("@");
@@ -57,7 +58,7 @@ function isTestEmail(email: string) {
   return false;
 }
 const PERMANENT_ERROR_CODES = new Set([
-  400, 401 /* 402 not included - unclear spec */, 403, 404, 405, 406, 407, 408,
+  400, 401 /* 402 not included - unclear spec */, 403, 404, 405, 406, 407,
   /* 409 not included - conflict may work on retry */
   410, 411 /* 412 not included - precondition may have changed? */, 413, 414,
   415, 416 /* 417, not included - expectation may be met later? */, 418, 421,
@@ -220,6 +221,7 @@ export const sendEmail = mutation({
       idempotencyKey: args.idempotencyKey,
       segment,
       status: "waiting",
+      batchSubmission: "pending",
       bounced: false,
       complained: false,
       failed: false,
@@ -316,7 +318,11 @@ export const cancelEmail = mutation({
     if (!email) {
       throw new Error("Email not found");
     }
-    if (email.status !== "waiting" && email.status !== "queued") {
+    if (
+      (email.status !== "waiting" && email.status !== "queued") ||
+      email.batchSubmission === "started" ||
+      email.batchSubmission === "legacy_started"
+    ) {
       throw new Error("Email has already been sent");
     }
     await ctx.db.patch("emails", args.emailId, {
@@ -558,17 +564,22 @@ export const callResendAPIWithBatch = internalAction({
     emails: v.array(v.id("emails")),
   },
   returns: vBatchReturns,
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ emailIds: Id<"emails">[]; resendIds: string[] } | null> => {
     // Construct the JSON payload for the Resend API from all the database values.
-    const batchPayload = await createResendBatchPayload(ctx, args.emails);
-
-    if (batchPayload === null) {
+    const { emailIds, firstAttempt } = await ctx.runMutation(
+      internal.lib.beginBatchSubmission,
+      { emailIds: args.emails },
+    );
+    if (emailIds.length === 0) {
       // No emails to send.
       console.log("No emails to send in batch. All were cancelled or failed.");
-      return;
+      return null;
     }
 
-    const [emailIds, body] = batchPayload;
+    const body = await createResendBatchPayload(ctx, emailIds);
 
     // Make API call
     const response = await fetch("https://api.resend.com/emails/batch", {
@@ -581,36 +592,74 @@ export const callResendAPIWithBatch = internalAction({
       body,
     });
     if (!response.ok) {
-      if (PERMANENT_ERROR_CODES.has(response.status)) {
-        const errorMessage = `Resend API error: ${response.status} ${response.statusText} ${await response.text()}`;
-        console.error(
-          JSON.stringify({
-            status: "permanent_failure",
-            httpStatus: response.status,
-            httpStatusText: response.statusText,
-            errorMessage,
-            emailIds: args.emails,
-          }),
-        );
+      if (firstAttempt && PERMANENT_ERROR_CODES.has(response.status)) {
+        const errorMessage = `Resend rejected the batch (HTTP ${response.status})`;
         await ctx.runMutation(internal.lib.markEmailsFailed, {
-          emailIds: args.emails,
+          emailIds,
           errorMessage,
         });
-        return;
+        return null;
       }
-      // For now, try again.
-      const errorText = await response.text();
-      throw new Error(`Resend API error: ${errorText}`);
+      throw new Error(
+        `Resend did not acknowledge the batch (HTTP ${response.status})`,
+      );
     } else {
       const data = await response.json();
-      if (!data.data) {
-        throw new Error("Resend API error: No data returned");
+      if (
+        !Array.isArray(data.data) ||
+        data.data.length !== emailIds.length ||
+        data.data.some(
+          (entry: { id?: unknown } | null) =>
+            typeof entry?.id !== "string" || !entry.id,
+        )
+      ) {
+        throw new Error("Resend did not acknowledge every email in the batch");
       }
       return {
         emailIds,
         resendIds: data.data.map((d: { id: string }) => d.id),
       };
     }
+  },
+});
+
+export const beginBatchSubmission = internalMutation({
+  args: { emailIds: v.array(v.id("emails")) },
+  returns: v.object({
+    emailIds: v.array(v.id("emails")),
+    firstAttempt: v.boolean(),
+  }),
+  handler: async (ctx, { emailIds }) => {
+    const rows = await Promise.all(
+      emailIds.map((id) => ctx.db.get("emails", id)),
+    );
+    if (rows.some((email) => email === null)) {
+      throw new Error("Cannot submit a Resend batch with missing emails");
+    }
+    const emails = rows.filter(
+      (email): email is Doc<"emails"> =>
+        email !== null &&
+        (email.status === "queued" ||
+          email.batchSubmission === "started" ||
+          email.batchSubmission === "legacy_started"),
+    );
+    const firstAttempt = emails.every(
+      (email) => email.batchSubmission === "pending",
+    );
+    for (const email of emails) {
+      if (
+        email.batchSubmission === "pending" ||
+        email.batchSubmission === undefined
+      ) {
+        // Historic batches may already have reached Resend. Preserve their
+        // original payload and treat any subsequent rejection as unconfirmed.
+        await ctx.db.patch("emails", email._id, {
+          batchSubmission:
+            email.batchSubmission === "pending" ? "started" : "legacy_started",
+        });
+      }
+    }
+    return { emailIds: emails.map((email) => email._id), firstAttempt };
   },
 });
 
@@ -641,6 +690,10 @@ async function markEmailsFailedHandler(
         errorMessage: args.errorMessage,
         finalizedAt: Date.now(),
       });
+      console.warn("Resend rejected an email submission", {
+        emailId,
+        reason: args.errorMessage,
+      });
     }),
   );
 }
@@ -657,32 +710,35 @@ export const onEmailComplete = emailPool.defineOnComplete({
       }
       const { emailIds, resendIds } = result;
       await Promise.all(
-        emailIds.map((emailId, i) =>
-          ctx.db.patch("emails", emailId, {
-            status: "sent",
-            resendId: resendIds[i],
-          }),
-        ),
-      );
-    } else if (args.result.kind === "failed") {
-      await markEmailsFailedHandler(ctx, {
-        emailIds: args.context.emailIds,
-        errorMessage: args.result.error,
-      });
-    } else if (args.result.kind === "canceled") {
-      await Promise.all(
-        args.context.emailIds.map(async (emailId) => {
+        emailIds.map(async (emailId, i) => {
           const email = await ctx.db.get("emails", emailId);
-          if (!email || email.status !== "queued") {
-            return;
+          if (email?.status === "queued") {
+            await ctx.db.patch("emails", emailId, {
+              status: "sent",
+              resendId: resendIds[i],
+            });
           }
-          await ctx.db.patch("emails", emailId, {
-            status: "cancelled",
-            errorMessage: "Resend API batch job was cancelled",
-            finalizedAt: Date.now(),
-          });
         }),
       );
+    } else {
+      for (const emailId of args.context.emailIds) {
+        const email = await ctx.db.get("emails", emailId);
+        if (email?.status === "queued") {
+          if (
+            args.result.kind === "canceled" &&
+            email.batchSubmission === "pending"
+          ) {
+            await ctx.db.patch("emails", emailId, {
+              status: "cancelled",
+              finalizedAt: Date.now(),
+            });
+            continue;
+          }
+          // Retries ended without proof of rejection. A later provider event
+          // may still establish the outcome.
+          console.warn("Resend submission was not confirmed", { emailId });
+        }
+      }
     }
   },
 });
@@ -691,15 +747,13 @@ export const onEmailComplete = emailPool.defineOnComplete({
 async function createResendBatchPayload(
   ctx: ActionCtx,
   emailIds: Id<"emails">[],
-): Promise<[Id<"emails">[], string] | null> {
+): Promise<string> {
   // Fetch emails from database.
-  const allEmails = await ctx.runQuery(internal.lib.getEmailsByIds, {
+  const emails = await ctx.runQuery(internal.lib.getEmailsByIds, {
     emailIds,
   });
-  // Filter out cancelled emails.
-  const emails = allEmails.filter((e) => e.status === "queued");
-  if (emails.length === 0) {
-    return null;
+  if (emails.length !== emailIds.length) {
+    throw new Error("Cannot retry a Resend batch with missing emails");
   }
   // Fetch body content from database.
   const contentMap = await getAllContent(
@@ -713,6 +767,10 @@ async function createResendBatchPayload(
   const batchPayload = emails.map((email: Doc<"emails">) => {
     const payload: Record<string, unknown> = {
       from: email.from,
+      tags:
+        email.batchSubmission === "started"
+          ? [{ name: EMAIL_REFERENCE_TAG, value: email._id }]
+          : undefined,
       to: Array.isArray(email.to) ? email.to : [email.to],
       bcc: email.bcc,
       cc: email.cc,
@@ -743,7 +801,7 @@ async function createResendBatchPayload(
     return payload;
   });
 
-  return [emails.map((e) => e._id), JSON.stringify(batchPayload)];
+  return JSON.stringify(batchPayload);
 }
 
 const FIXED_WINDOW_DELAY = 100;
@@ -945,10 +1003,31 @@ export const handleEmailEvent = mutation({
 
     const event = result.data;
 
-    const email = await ctx.db
+    let email = await ctx.db
       .query("emails")
       .withIndex("by_resendId", (q) => q.eq("resendId", event.data.email_id))
       .unique();
+
+    if (!email) {
+      const tags = event.data.tags;
+      const reference = Array.isArray(tags)
+        ? tags.find((tag) => tag.name === EMAIL_REFERENCE_TAG)?.value
+        : tags?.[EMAIL_REFERENCE_TAG];
+      const id = reference && ctx.db.normalizeId("emails", reference);
+      const submitted = id ? await ctx.db.get("emails", id) : null;
+      if (
+        submitted?.status === "queued" &&
+        submitted.batchSubmission === "started" &&
+        submitted.resendId === undefined
+      ) {
+        const accepted = {
+          status: "sent" as const,
+          resendId: event.data.email_id,
+        };
+        await ctx.db.patch("emails", submitted._id, accepted);
+        email = { ...submitted, ...accepted };
+      }
+    }
 
     if (!email) {
       console.info(
