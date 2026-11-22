@@ -788,6 +788,7 @@ export const onEmailComplete = emailPool.defineOnComplete({
       // A completion produced before an upgrade may bypass action validation.
       if (
         emailIds.length !== resendIds.length ||
+        resendIds.some((id) => !id) ||
         new Set(resendIds).size !== resendIds.length
       ) {
         for (const id of emailIds) {
@@ -1162,7 +1163,9 @@ export const handleEmailEvent = mutation({
         (submitted.status === "queued" || submitted.submissionUnconfirmed) &&
         submitted.batchSubmission === "started" &&
         submitted.resendId === undefined &&
-        matchesSubmissionEnvelope(submitted, event)
+        matchesSubmissionEnvelope(submitted, event) &&
+        (args.event?.data?.template_id === undefined ||
+          args.event.data.template_id === submitted.template?.id)
       ) {
         const accepted = {
           status: "sent" as const,
