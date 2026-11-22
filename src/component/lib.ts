@@ -1196,12 +1196,21 @@ export const handleEmailEvent = mutation({
 
 function matchesSubmissionEnvelope(email: Doc<"emails">, event: EmailEvent) {
   const address = (value: string) =>
-    (value.match(/<([^<>]+)>$/)?.[1] ?? value).trim().toLowerCase();
-  const recipients = (value: string | string[]) =>
-    (Array.isArray(value) ? value : [value]).map(address).sort().join(",");
+    (value.trim().match(/<([^<>]+)>$/)?.[1] ?? value).trim().toLowerCase();
+  const addresses = (value: string | string[]) =>
+    (Array.isArray(value) ? value : [value]).map(address);
+  const sentTo = new Set(
+    addresses(email.to).concat(
+      addresses(email.cc ?? []),
+      addresses(email.bcc ?? []),
+    ),
+  );
+  const eventTo = addresses(event.data.to).filter(Boolean);
+  // Resend may report a delivery outcome for just one recipient of a send.
   return (
-    recipients(email.from) === recipients(event.data.from) &&
-    recipients(email.to) === recipients(event.data.to) &&
+    addresses(event.data.from).join(",") === addresses(email.from).join(",") &&
+    eventTo.length > 0 &&
+    eventTo.every((recipient) => sentTo.has(recipient)) &&
     (email.subject === undefined || email.subject === event.data.subject)
   );
 }

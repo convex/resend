@@ -13,7 +13,9 @@ describe("batch submission", () => {
   it("preserves delivery history when an accepted batch loses its acknowledgement", async () => {
     const t = setupTest();
     const a = await insertTestSentEmail(t);
-    const b = await insertTestSentEmail(t);
+    const b = await insertTestSentEmail(t, {
+      to: ["recipient@example.com", "other@example.com"],
+    });
     await t.run(async (ctx) => {
       for (const row of [a, b]) {
         await ctx.db.patch("emails", row._id, {
