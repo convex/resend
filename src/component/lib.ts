@@ -671,7 +671,9 @@ export const callResendAPIWithBatch = internalAction({
         data.data.length !== emailIds.length ||
         data.data.some(
           (entry: { id?: unknown } | null) =>
-            typeof entry?.id !== "string" || !entry.id,
+            typeof entry?.id !== "string" ||
+            !entry.id.trim() ||
+            entry.id.trim() !== entry.id,
         )
       ) {
         throw new Error("Resend did not acknowledge every email in the batch");
@@ -788,7 +790,7 @@ export const onEmailComplete = emailPool.defineOnComplete({
       // A completion produced before an upgrade may bypass action validation.
       if (
         emailIds.length !== resendIds.length ||
-        resendIds.some((id) => !id) ||
+        resendIds.some((id) => !id.trim() || id.trim() !== id) ||
         new Set(resendIds).size !== resendIds.length
       ) {
         for (const id of emailIds) {

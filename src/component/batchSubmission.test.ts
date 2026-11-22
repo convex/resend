@@ -176,34 +176,37 @@ describe("batch submission", () => {
     );
   });
 
-  it("rejects a pending completion with duplicate IDs without binding either row", async () => {
-    const t = setupTest();
-    const a = await insertTestSentEmail(t, {
-      status: "queued",
-      resendId: undefined,
-    });
-    const b = await insertTestSentEmail(t, {
-      status: "queued",
-      resendId: undefined,
-    });
-    const emailIds = [a._id, b._id];
-    await t.mutation(internal.lib.onEmailComplete, {
-      workId: "old-work" as WorkId,
-      context: { emailIds },
-      result: {
-        kind: "success",
-        returnValue: { emailIds, resendIds: ["duplicate", "duplicate"] },
-      },
-    });
-    for (const emailId of emailIds) {
-      expect(await t.query(api.lib.get, { emailId })).not.toHaveProperty(
-        "resendId",
-      );
-      expect(await t.query(api.lib.getStatus, { emailId })).toMatchObject({
-        status: "failed",
+  it.each(["duplicate", "", "   ", " duplicate "])(
+    "rejects a malformed pending completion with invalid ID %j",
+    async (badId) => {
+      const t = setupTest();
+      const a = await insertTestSentEmail(t, {
+        status: "queued",
+        resendId: undefined,
       });
-    }
-  });
+      const b = await insertTestSentEmail(t, {
+        status: "queued",
+        resendId: undefined,
+      });
+      const emailIds = [a._id, b._id];
+      await t.mutation(internal.lib.onEmailComplete, {
+        workId: "old-work" as WorkId,
+        context: { emailIds },
+        result: {
+          kind: "success",
+          returnValue: { emailIds, resendIds: ["duplicate", badId] },
+        },
+      });
+      for (const emailId of emailIds) {
+        expect(await t.query(api.lib.get, { emailId })).not.toHaveProperty(
+          "resendId",
+        );
+        expect(await t.query(api.lib.getStatus, { emailId })).toMatchObject({
+          status: "failed",
+        });
+      }
+    },
+  );
 
   it("preserves manual delivery events with an app-owned reference tag", async () => {
     const t = setupTest();
