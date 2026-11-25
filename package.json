@@ -58,7 +58,7 @@
     }
   },
   "peerDependencies": {
-    "convex": "^1.43.0",
+    "convex": "^1.47.0",
     "convex-helpers": "^0.1.106"
   },
   "devDependencies": {
@@ -90,7 +90,7 @@
   "module": "./dist/client/index.js",
   "dependencies": {
     "@convex-dev/rate-limiter": "^0.4.0",
-    "@convex-dev/workpool": "^0.4.10 || ^0.5.0",
+    "@convex-dev/workpool": "^0.5.0",
     "remeda": "^2.26.0",
     "resend": "^6.6.0",
     "svix": "^1.70.0"
