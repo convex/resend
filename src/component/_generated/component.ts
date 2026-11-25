@@ -179,7 +179,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "bounced"
             | "failed";
         },
-        null,
+        string | null,
         Name
       >;
     };

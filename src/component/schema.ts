@@ -49,6 +49,16 @@ export default defineSchema({
     deliveryDelayed: v.optional(v.boolean()),
     clicked: v.optional(v.boolean()),
     resendId: v.optional(v.string()),
+    batchSubmission: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("started"),
+        v.literal("legacy_started"),
+      ),
+    ),
+    batchSize: v.optional(v.number()),
+    batchReferenceToken: v.optional(v.string()),
+    submissionUnconfirmed: v.optional(v.literal(true)),
     idempotencyKey: v.optional(v.string()),
     segment: v.number(),
     finalizedAt: v.number(),
