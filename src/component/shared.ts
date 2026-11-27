@@ -37,6 +37,7 @@ export const vOptions = v.object({
   initialBackoffMs: v.number(),
   retryAttempts: v.number(),
   apiKey: v.string(),
+  baseUrl: v.optional(v.string()),
   testMode: v.boolean(),
   onEmailEvent: v.optional(onEmailEvent),
 });

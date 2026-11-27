@@ -159,6 +159,9 @@ Check out the [docstrings](./src/client/index.ts), but notable options include:
 - `apiKey`: Provide the Resend API key instead of having it read from the
   environment variable.
 - `webhookSecret`: Same thing, but for the webhook secret.
+- `baseUrl`: Send batches to another Resend-compatible API instead of
+  `https://api.resend.com`, e.g. a local Resend emulator in end-to-end tests.
+  It is never read from the environment.
 - `testMode`: Only allow delivery to test addresses. To keep you safe as you
   develop your project, `testMode` is default **true**. You need to explicitly
   set this to `false` for the component to allow you to enqueue emails to
