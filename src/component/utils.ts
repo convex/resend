@@ -34,7 +34,7 @@ export function attemptToParse<T extends Validator<any, any, any>>(
  * and a full RFC-5322 compliant regex would be way too long.
  */
 const RESEND_TEST_EMAIL_REGEX =
-  /^(delivered|bounced|complained)(\+[a-zA-Z0-9_-]*)?@resend\.dev$/;
+  /^((delivered|bounced|complained)(\+[a-zA-Z0-9_-]*)?|suppressed)@resend\.dev$/;
 
 /**
  * Check if the given e-mail address is a valid test e-mail for Resend.

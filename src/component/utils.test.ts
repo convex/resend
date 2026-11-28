@@ -6,6 +6,7 @@ describe("isValidResendTestEmail", () => {
     expect(isValidResendTestEmail("delivered@resend.dev")).toBe(true);
     expect(isValidResendTestEmail("bounced@resend.dev")).toBe(true);
     expect(isValidResendTestEmail("complained@resend.dev")).toBe(true);
+    expect(isValidResendTestEmail("suppressed@resend.dev")).toBe(true);
   });
 
   it("allows valid test emails with labels", () => {
@@ -25,6 +26,7 @@ describe("isValidResendTestEmail", () => {
 
   it("rejects invalid test emails with or without labels", () => {
     expect(isValidResendTestEmail("foobar@resend.dev")).toBe(false);
+    expect(isValidResendTestEmail("suppressed+label@resend.dev")).toBe(false);
     expect(isValidResendTestEmail("bazfoo+user@resend.dev")).toBe(false);
     expect(isValidResendTestEmail("delivered@resended.dev")).toBe(false);
   });
